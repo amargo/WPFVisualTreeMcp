@@ -340,7 +340,7 @@ public partial class InspectorService : IDisposable
     {
         return requestType switch
         {
-            "GetCapabilities" => new GetCapabilitiesResponse { CoordinatePointerInput = true, AutomationIdTargeting = true, AutomationIdOptionalResolution = true, AdvancedAutomation = true, PropertySubscriptions = true, GridRead = true },
+            "GetCapabilities" => new GetCapabilitiesResponse { CoordinatePointerInput = true, AutomationIdTargeting = true, AutomationIdOptionalResolution = true, AdvancedAutomation = true, PropertySubscriptions = true, GridRead = true, AutomationIdNameFallback = true },
             "ResolveAutomationId" => HandleResolveAutomationId(data),
             "Record" => HandleRecord(data),
             "AssertElement" => HandleAssertElement(data),
@@ -477,9 +477,9 @@ public partial class InspectorService : IDisposable
         IEnumerable<DependencyObject> roots = request.RootHandle == null ? TreeWalker.GetAllSearchRoots() :
             new[] { _treeWalker.ResolveHandle(request.RootHandle)
                 ?? throw new InvalidOperationException(StaleHandleError(request.RootHandle)) };
-        var element = AutomationIdResolver.ResolveOrDefault(request.AutomationId, roots);
+        var element = AutomationIdResolver.ResolveOrDefault(request.AutomationId, roots, _treeWalker.GetOrCreateHandle);
         if (element == null)
-            return new ResolveAutomationIdResponse { Success = false, NotFound = true, Error = "AutomationId '" + request.AutomationId + "' was not found in the requested scope." };
+            return new ResolveAutomationIdResponse { Success = false, NotFound = true, Error = "AutomationId '" + request.AutomationId + "' was not found in the requested scope." + AutomationIdResolver.NotFoundHint };
         return new ResolveAutomationIdResponse { ElementHandle = _treeWalker.GetOrCreateHandle(element) };
     }
 

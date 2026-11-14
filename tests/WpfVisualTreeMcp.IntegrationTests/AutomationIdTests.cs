@@ -47,6 +47,52 @@ public class AutomationIdTests
     });
 
     [Fact]
+    public Task Falls_back_to_x_name_like_ui_automation_and_prefers_an_explicit_id() => DiagnosticReporterTests.OnSta(() =>
+    {
+        var root = new StackPanel();
+        var named = new DataGrid { Name = "MainDataGrid" };
+        root.Children.Add(named);
+        root.Children.Add(new TextBox { Name = "maindatagrid" });
+        AutomationIdResolver.Resolve("MainDataGrid", new[] { root }).Should().BeSameAs(named);
+
+        // A second element with only the same name is ambiguous, and the error names the candidates.
+        var hidden = new DataGrid { Name = "MainDataGrid", Visibility = Visibility.Collapsed };
+        root.Children.Add(hidden);
+        var ambiguous = () => AutomationIdResolver.ResolveOrDefault("MainDataGrid", new[] { root }, e => ReferenceEquals(e, hidden) ? "elem_hidden" : "elem_shown");
+        ambiguous.Should().Throw<InvalidOperationException>()
+            .WithMessage("*Ambiguous*2 elements match by x:Name*DataGrid elem_shown (not visible); DataGrid elem_hidden (not visible)*root_handle*");
+
+        // An explicit AutomationId wins over name-only matches.
+        var explicitId = Button("MainDataGrid");
+        root.Children.Add(explicitId);
+        AutomationIdResolver.Resolve("MainDataGrid", new[] { root }).Should().BeSameAs(explicitId);
+
+        // An element with an explicit id is not reachable by its name.
+        var byName = () => AutomationIdResolver.Resolve("DifferentName", new[] { root });
+        byName.Should().Throw<InvalidOperationException>().WithMessage("*not found*x:Name*");
+    });
+
+    [Fact]
+    public Task Names_inside_templates_are_not_ids_and_find_uses_the_same_fallback() => DiagnosticReporterTests.OnSta(() =>
+    {
+        var factory = new FrameworkElementFactory(typeof(TextBlock)) { Name = "Inner" };
+        var list = new ListBox { Name = "Items", ItemsSource = new[] { "a", "b" }, ItemTemplate = new DataTemplate { VisualTree = factory } };
+        var window = new Window { Content = list, Width = 200, Height = 200 }; window.Show(); window.UpdateLayout();
+        try
+        {
+            var walker = new TreeWalker();
+            int Matches(string id) => System.Text.RegularExpressions.Regex.Matches(
+                walker.FindElements(window, new FindCriteria { AutomationId = id }, 100), "\"handle\"").Count;
+
+            Matches("Items").Should().Be(1);
+            Matches("Inner").Should().Be(0, "template-internal names repeat per row");
+            AutomationIdResolver.ResolveOrDefault("Inner", new[] { (DependencyObject)window }).Should().BeNull();
+            AutomationIdResolver.Resolve("Items", new[] { (DependencyObject)window }).Should().BeSameAs(list);
+        }
+        finally { window.Close(); }
+    });
+
+    [Fact]
     public Task Searches_popup_children_and_deduplicates_overlapping_roots() => DiagnosticReporterTests.OnSta(() =>
     {
         var target = Button("popup.save");

@@ -193,8 +193,11 @@ control's click command; use physical input and verify the intended effect.
 
 Supply exactly one of `element_handle` or `automation_id`. For example,
 `wpf_click_element(automation_id="form.clear")` clicks without a prior handle lookup.
-The ID matches `AutomationProperties.AutomationId` exactly (case-sensitive),
-independently of `x:Name` or the control's text. Resolution includes all open WPF
+The ID matches `AutomationProperties.AutomationId` exactly (case-sensitive). An element
+without an explicit AutomationId is identified by its `x:Name`, as in UI Automation and
+FlaUI `ById`; names inside control/data templates are ignored and an explicit
+AutomationId wins over name-only matches. An ambiguous ID lists the candidates (type,
+handle, window, visibility). Resolution includes all open WPF
 windows and hidden controls; duplicates are errors. Use `root_handle` to restrict
 ID lookup to a window or container, including the root itself. Missing, stale,
 ambiguous or incomplete searches return errors without clicking. Unique lookup
@@ -542,7 +545,7 @@ AutomationId requests fail explicitly until it supports the filter.
 |------|------|----------|-------------|
 | `type_name` | string | No | Element type, partial match (e.g., "Button", "TextBox"). Prefix with `=` to match only that type and types derived from it: `=DataGrid` finds grids and DataGrid subclasses, not `DataGridCell` or `DataGridColumnHeader` |
 | `element_name` | string | No | x:Name of the element |
-| `automation_id` | string | No | Exact AutomationProperties.AutomationId (case-sensitive, 1–2048 characters, nonblank) |
+| `automation_id` | string | No | Exact AutomationProperties.AutomationId, or x:Name for elements without one (case-sensitive, 1–2048 characters, nonblank) |
 | `root_handle` | string | No | Restrict search to this window or subtree |
 | `property_filter` | object | No | Property name/value pairs to filter by |
 

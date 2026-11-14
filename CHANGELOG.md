@@ -21,6 +21,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `automation_id` falls back to `x:Name` for elements without an explicit
+  `AutomationProperties.AutomationId` (outside templates), matching UI Automation and
+  FlaUI `ById`. An explicit ID wins; ambiguous IDs list the candidates with type,
+  handle, window and visibility.
+- CLI output and error streams are both UTF-8, so redirected `2>&1` output no longer
+  mixes the console code page with UTF-8.
 - `wpf_select_item` / CLI `select-item` on a DataGrid match `item_text` against the
   row's visible cell texts (as `wpf_read_grid` returns them, virtualized rows
   included) instead of the data item's `ToString()`.

@@ -54,6 +54,11 @@ public static class CliRunner
     /// <summary>Runs a single CLI command and returns the process exit code.</summary>
     public static async Task<int> RunAsync(string[] args)
     {
+        // stdout JSON and stderr text must share one encoding: with the console code page
+        // (e.g. CP852) a redirected "2>&1" stream mixes encodings and breaks UTF-8 readers.
+        try { Console.OutputEncoding = new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false); }
+        catch (Exception ex) when (ex is System.IO.IOException or System.Security.SecurityException) { }
+
         var command = args[0].TrimStart('-').ToLowerInvariant();
         var cli = CliArgs.Parse(args.Skip(1).ToArray(), KnownFlags);
 
@@ -799,7 +804,8 @@ TYPICAL WORKFLOW
                     + "    its subclasses only (e.g. =DataGrid skips DataGridCell)\n"
                     + "  --text: visible text content (button caption, TextBlock text, window\n"
                     + "          title, tooltip; case-insensitive substring)\n"
-                    + "  --automation-id: exact, case-sensitive AutomationProperties.AutomationId; --name: x:Name substring\n"
+                    + "  --automation-id: exact, case-sensitive AutomationProperties.AutomationId,\n"
+                    + "    or x:Name for elements without one (outside templates); --name: x:Name substring\n"
                     + "  --visible-only: exclude collapsed/hidden elements\n"
                     + "  --filter: JSON object of property=value pairs, e.g. '{\"IsEnabled\":\"True\"}'\n"
                     + "  Results include text, automationId, isVisible/isEnabled and screenBounds.\n"

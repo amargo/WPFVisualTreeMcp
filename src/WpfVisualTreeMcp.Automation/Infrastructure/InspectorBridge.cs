@@ -667,6 +667,14 @@ public partial class InspectorBridge : IIpcBridge
         await ValidateAutomationIdAsync(session.ProcessId, automationId);
         var response = await SendRequestAsync<ResolveAutomationIdRequest, ResolveAutomationIdResponse>(session.ProcessId,
             new ResolveAutomationIdRequest { AutomationId = automationId!, RootHandle = rootHandle });
+        if (response.NotFound)
+        {
+            // An older Inspector matches only explicit AutomationIds; say so instead of a bare "not found".
+            var capabilities = await SendRequestAsync<GetCapabilitiesRequest, GetCapabilitiesResponse>(session.ProcessId, new GetCapabilitiesRequest());
+            if (capabilities.Success && !capabilities.AutomationIdNameFallback)
+                throw CreateException((response.Error ?? "AutomationId was not found.") +
+                    " Note: the Inspector loaded in the attached app is older than this server and does not match x:Name. If the element only has an x:Name, restart the app and reattach, or target it with element_name / element_handle.");
+        }
         if (!response.Success || string.IsNullOrEmpty(response.ElementHandle))
             throw CreateException(response.Error ?? "Inspector did not resolve the AutomationId.");
         return response.ElementHandle!;

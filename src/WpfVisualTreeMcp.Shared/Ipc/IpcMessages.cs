@@ -32,6 +32,8 @@ public class GetCapabilitiesResponse : IpcResponse
     public bool AdvancedAutomation { get; set; }
     public bool PropertySubscriptions { get; set; }
     public bool GridRead { get; set; }
+    /// <summary>automation_id also matches x:Name for elements without an explicit AutomationId.</summary>
+    public bool AutomationIdNameFallback { get; set; }
 }
 
 public class ResolveAutomationIdRequest : IpcRequest

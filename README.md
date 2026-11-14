@@ -596,7 +596,8 @@ For complete tool documentation, see [docs/TOOLS_REFERENCE.md](docs/TOOLS_REFERE
 All input actions accept `automation_id` instead of `element_handle`, including
 click, mouse movement, scrolling, drag, every touch gesture, selection, text and
 keyboard input. Assertions and property edits accept it too. IDs match
-`AutomationProperties.AutomationId` exactly and case-sensitively; duplicates fail.
+`AutomationProperties.AutomationId` exactly and case-sensitively (or `x:Name` for
+elements without one, outside templates); duplicates fail.
 Use `root_handle` to scope lookup. Drag destinations accept `target_automation_id`
 and an independent `target_root_handle`. The same selectors work in recordings
 and exported tests.

@@ -25,7 +25,7 @@ public class FindCriteria
     /// <summary>x:Name, matched as case-insensitive substring.</summary>
     public string? ElementName { get; set; }
 
-    /// <summary>Exact, case-sensitive AutomationProperties.AutomationId match.</summary>
+    /// <summary>Exact, case-sensitive match on AutomationProperties.AutomationId, or x:Name for elements without one.</summary>
     public string? AutomationId { get; set; }
 
     /// <summary>
@@ -508,7 +508,7 @@ public class TreeWalker
         var type = element.GetType();
 
         if (criteria.AutomationId != null &&
-            !string.Equals(GetAutomationId(element), criteria.AutomationId, StringComparison.Ordinal))
+            !string.Equals(AutomationIdResolver.EffectiveId(element), criteria.AutomationId, StringComparison.Ordinal))
             return false;
 
         if (!string.IsNullOrEmpty(criteria.TypeName))
