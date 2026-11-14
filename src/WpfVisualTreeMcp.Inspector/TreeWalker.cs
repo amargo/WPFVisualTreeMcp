@@ -726,6 +726,9 @@ public class TreeWalker
         return element switch
         {
             Window w => w.Title,
+            // Cell text sits too deep for the shallow descendant scan; a row reads as its cells.
+            DataGridRow row => string.Join(" ", ControlOperations.Descendants(row).OfType<DataGridCell>()
+                .Select(ControlOperations.CellText).Where(t => !string.IsNullOrWhiteSpace(t)).Select(t => t!.Trim())),
             // Inline-bound/localized Runs can render text while Text remains empty.
             TextBlock tb => !string.IsNullOrEmpty(tb.Text)
                 ? tb.Text : new TextRange(tb.ContentStart, tb.ContentEnd).Text,

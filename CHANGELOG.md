@@ -21,6 +21,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `wpf_select_item` on a DataGrid scrolls the row into view, makes it the current row
+  and moves keyboard focus into it; keys sent to a grid go to its current cell, so
+  `select_item` followed by `send_keys Enter` acts on the selected row.
+- `wpf_find_elements` / `wpf_find_elements_deep` shorten each result's `path` to its
+  nearest ancestors (`full_path=true` restores it; CLI opt-in `--short-path`), and a
+  realized `DataGridRow` is searchable by its cell text.
+- `wpf_report` merges identical binding trace errors (`occurrences`, `firstSeen`) and
+  binding findings name the path and source type.
+- Clearer errors: `root_handle` passed with `element_handle`, an ID inside a closed
+  menu or unrendered container, and an application that exits during a request.
+- `wpf_read_grid` columns report `sortMemberPath` when that is the value source.
 - `automation_id` falls back to `x:Name` for elements without an explicit
   `AutomationProperties.AutomationId` (outside templates), matching UI Automation and
   FlaUI `ById`. An explicit ID wins; ambiguous IDs list the candidates with type,

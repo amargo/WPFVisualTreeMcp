@@ -18,7 +18,7 @@ public class DiagnosticReport
     public int CapturedBindingErrorCount { get; set; }
     public List<BindingError> RecentBindingErrors { get; set; } = new();
     public string BindingErrorScope { get; set; } = "process_since_inspector_attach";
-    public string Coverage { get; set; } = "Realized visual elements only; virtualized items are not materialized. Disabled, invisible and zero-size counts describe state, not defects. Captured binding traces are process-wide history and may no longer apply.";
+    public string Coverage { get; set; } = "Realized visual elements only; virtualized items are not materialized. Disabled, invisible and zero-size counts describe state, not defects. Captured binding traces are process-wide history and may no longer apply. findingCount covers only the scanned elements; recentBindingErrors are that separate history (identical errors merged with an occurrences count) and are not counted as findings.";
 }
 
 public class DiagnosticFinding

@@ -93,6 +93,26 @@ public class AutomationIdTests
     });
 
     [Fact]
+    public Task Explains_an_id_that_exists_only_inside_a_closed_menu() => DiagnosticReporterTests.OnSta(() =>
+    {
+        var export = new MenuItem { Header = "Export" };
+        AutomationProperties.SetAutomationId(export, "file.export");
+        var file = new MenuItem { Header = "File" };
+        file.Items.Add(export);
+        var menu = new Menu();
+        menu.Items.Add(file);
+        var window = new Window { Content = menu, Width = 200, Height = 100 }; window.Show(); window.UpdateLayout();
+        try
+        {
+            var closed = () => AutomationIdResolver.Resolve("file.export", new[] { (DependencyObject)window });
+            closed.Should().Throw<InvalidOperationException>().WithMessage("*not found*MenuItem*closed menu 'File'*Open that menu first*");
+            var absent = () => AutomationIdResolver.Resolve("file.nothing", new[] { (DependencyObject)window });
+            absent.Should().Throw<InvalidOperationException>().WithMessage("*not found*x:Name*");
+        }
+        finally { window.Close(); }
+    });
+
+    [Fact]
     public Task Searches_popup_children_and_deduplicates_overlapping_roots() => DiagnosticReporterTests.OnSta(() =>
     {
         var target = Button("popup.save");

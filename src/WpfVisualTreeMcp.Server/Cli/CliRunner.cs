@@ -35,7 +35,7 @@ public static class CliRunner
     /// <summary>Options that never take a value (presence alone is meaningful).</summary>
     private static readonly HashSet<string> KnownFlags = new(StringComparer.OrdinalIgnoreCase)
     {
-        "auto-inject", "compact", "verbose", "physical", "horizontal", "visible-only", "full-content", "all", "help", "h", "check", "status",
+        "auto-inject", "compact", "short-path", "verbose", "physical", "horizontal", "visible-only", "full-content", "all", "help", "h", "check", "status",
     };
 
     private static string Exe =>
@@ -221,6 +221,7 @@ public static class CliRunner
                         ParseFilter(cli.GetStringOrNull("filter")),
                         cli.Flags.Contains("visible-only"),
                         cli.GetInt("max", 50), cli.GetStringOrNull("automation-id"));
+                    if (cli.Flags.Contains("short-path")) WpfTools.ShortenPaths(result);
                     WriteJson(result, cli);
                     break;
                 }
@@ -234,10 +235,12 @@ public static class CliRunner
                     var automationId = cli.GetStringOrNull("automation-id");
                     if (string.IsNullOrEmpty(type) && string.IsNullOrEmpty(name) && string.IsNullOrEmpty(text) && automationId == null)
                         throw new ArgumentException("find-deep requires --type, --name, --text or --automation-id to bound the search.");
-                    WriteJson(await bridge.FindElementsDeepAsync(
+                    var deep = await bridge.FindElementsDeepAsync(
                         cli.GetStringOrNull("root"), type, name, text,
                         ParseFilter(cli.GetStringOrNull("filter")),
-                        cli.Flags.Contains("visible-only"), automationId), cli);
+                        cli.Flags.Contains("visible-only"), automationId);
+                    if (cli.Flags.Contains("short-path")) WpfTools.ShortenPaths(deep);
+                    WriteJson(deep, cli);
                     break;
                 }
 
@@ -798,7 +801,7 @@ TYPICAL WORKFLOW
                       + "  Set WPF_TEST_APP and WPFINSPECT_PATH to absolute executable paths, then dotnet test.\n"
                       + "  The generated test starts a fresh app and terminates only its own app after testing.",
             "props" => "props --pid <id> --handle <handle>\n  List the dependency properties of an element.",
-            "find" => "find --pid <id> [--automation-id ID] [--type T] [--name N] [--text S] [--visible-only] [--root H] [--max N] [--filter JSON]\n"
+            "find" => "find --pid <id> [--automation-id ID] [--type T] [--name N] [--text S] [--visible-only] [--root H] [--max N] [--filter JSON] [--short-path]\n"
                     + "  Search elements (up to --max, default 50). Filters combine with AND:\n"
                     + "  --type: type name (partial match, e.g. Button); =Type matches that type and\n"
                     + "    its subclasses only (e.g. =DataGrid skips DataGridCell)\n"
@@ -807,6 +810,7 @@ TYPICAL WORKFLOW
                     + "  --automation-id: exact, case-sensitive AutomationProperties.AutomationId,\n"
                     + "    or x:Name for elements without one (outside templates); --name: x:Name substring\n"
                     + "  --visible-only: exclude collapsed/hidden elements\n"
+                    + "  --short-path: keep only the nearest ancestors in each result's path (also find-deep)\n"
                     + "  --filter: JSON object of property=value pairs, e.g. '{\"IsEnabled\":\"True\"}'\n"
                     + "  Results include text, automationId, isVisible/isEnabled and screenBounds.\n"
                     + "  Example: find --pid 1234 --type Button --text Save --visible-only",

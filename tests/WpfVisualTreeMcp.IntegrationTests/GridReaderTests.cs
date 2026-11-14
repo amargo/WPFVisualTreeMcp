@@ -107,6 +107,7 @@ public class GridReaderTests
 
             result.RowCount.Should().Be(300, "the new-item placeholder is not a data row");
             result.Columns.Select(c => c.ValueSource).Should().Equal("sortMemberPath", "visual");
+            result.Columns.Select(c => c.SortMemberPath).Should().Equal("Id", null);
             result.Rows[0].Cells.Should().Equal("0", "name0");
             result.Rows[299].Cells.Should().Equal("299", null);
             result.Note.Should().Contain("visual");
@@ -134,7 +135,17 @@ public class GridReaderTests
             // Row.ToString() is the type name; the visible cell text must be what matches.
             var outcome = interactor.SelectItem(grid, "NAME473", null);
             grid.SelectedIndex.Should().Be(473);
-            outcome.Detail.Should().Contain("selected row 473").And.Contain("name473");
+            outcome.Detail.Should().Contain("selected row 473").And.Contain("name473").And.Contain("row is current");
+            // Like a user's click: the row is scrolled into view and becomes the current row,
+            // so a following Enter acts on it.
+            grid.CurrentCell.Item.Should().BeSameAs(grid.Items[473]);
+            grid.ItemContainerGenerator.ContainerFromIndex(473).Should().NotBeNull();
+
+            // A realized row is searchable by its cell text.
+            int Rows(string text) => System.Text.RegularExpressions.Regex.Matches(
+                new TreeWalker().FindElements(window, new FindCriteria { TypeName = "=DataGridRow", Text = text }, 100), "\"handle\"").Count;
+            Rows("name473").Should().Be(1);
+            Rows("no such text").Should().Be(0);
 
             // Formatted cell text (hu-HU decimal comma) is searchable, not just raw property values.
             interactor.SelectItem(grid, 12.5m.ToString("N2", CultureInfo.GetCultureInfo("hu-HU")), null);

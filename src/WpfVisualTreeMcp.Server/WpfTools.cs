@@ -124,7 +124,7 @@ public class WpfTools
     }
 
     [McpServerTool]
-    [Description("Query elements across all open windows. Filters combine with AND: automation_id (exact, case-sensitive AutomationProperties.AutomationId or, for elements without one, x:Name outside templates, like UI Automation/FlaUI ById), type_name (partial match, e.g. 'Button' matches 'System.Windows.Controls.Button'; prefix with '=' for the type itself or types derived from it, e.g. '=DataGrid' finds grids and DataGrid subclasses but not DataGridCell), element_name (x:Name substring), text (visible text content — matches a Button's caption, TextBlock text, Window title, AutomationProperties.Name, ToolTip; case-insensitive substring), property_filter (object of property name → expected value substring, e.g. {\"IsEnabled\": \"True\"}), visible_only (exclude collapsed/hidden elements — recommended when looking for something the user can see). PREFER text over dumping the tree: e.g. text='Save' + type_name='Button' finds the Save button directly. Results include text, automationId, isVisible, isEnabled and screenBounds (device pixels) so you can pick the right element without extra calls. Returns up to max_results (default 50).")]
+    [Description("Query elements across all open windows. Filters combine with AND: automation_id (exact, case-sensitive AutomationProperties.AutomationId or, for elements without one, x:Name outside templates, like UI Automation/FlaUI ById), type_name (partial match, e.g. 'Button' matches 'System.Windows.Controls.Button'; prefix with '=' for the type itself or types derived from it, e.g. '=DataGrid' finds grids and DataGrid subclasses but not DataGridCell), element_name (x:Name substring), text (visible text content — matches a Button's caption, TextBlock text, Window title, AutomationProperties.Name, ToolTip; case-insensitive substring), property_filter (object of property name → expected value substring, e.g. {\"IsEnabled\": \"True\"}), visible_only (exclude collapsed/hidden elements — recommended when looking for something the user can see). PREFER text over dumping the tree: e.g. text='Save' + type_name='Button' finds the Save button directly. Results include text, automationId, isVisible, isEnabled and screenBounds (device pixels) so you can pick the right element without extra calls. Each result's path is shortened to its nearest ancestors to keep responses small; pass full_path=true for the complete root-to-element path. Returns up to max_results (default 50).")]
     public async Task<object> WpfFindElements(
         string? root_handle = null,
         string? type_name = null,
@@ -133,16 +133,41 @@ public class WpfTools
         JsonElement? property_filter = null,
         bool visible_only = false,
         int max_results = 50,
-        string? automation_id = null)
+        string? automation_id = null,
+        bool full_path = false)
     {
         var result = await _ipcBridge.FindElementsAsync(
             root_handle, type_name, element_name, text,
             ToFilterDictionary(property_filter), visible_only, max_results, automation_id);
+        return full_path ? result : ShortenPaths(result);
+    }
+
+    internal const int ShortPathSegments = 3;
+
+    /// <summary>
+    /// Full root-to-element paths dominate large result sets (tens of kilobytes for a few dozen
+    /// matches). By default only the nearest ancestors are kept; the handle identifies the element.
+    /// </summary>
+    internal static FindElementsResult ShortenPaths(FindElementsResult result)
+    {
+        foreach (var element in result.Elements) element.Path = ShortenPath(element.Path);
         return result;
     }
 
+    internal static string ShortenPath(string path)
+    {
+        const string separator = " > ";
+        var cut = path.Length;
+        for (var kept = 0; kept < ShortPathSegments; kept++)
+        {
+            cut = path.LastIndexOf(separator, cut - 1, StringComparison.Ordinal);
+            if (cut <= 0) return path;
+        }
+        return "… > " + path.Substring(cut + separator.Length);
+    }
+
     [McpServerTool]
-    [Description("Deep search for ALL elements matching criteria (no result limit). Requires at least type_name, element_name, text or automation_id to avoid returning the entire tree. Same filters as wpf_find_elements: automation_id (exact, case-sensitive), type_name (partial match, or '=Type' for that type and its subclasses only), element_name (x:Name substring), text (visible text content), property_filter, visible_only. Use root_handle to limit scope.")]
+    [Description("Deep search for ALL elements matching criteria (no result limit). Requires at least type_name, element_name, text or automation_id to avoid returning the entire tree. Same filters as wpf_find_elements: automation_id (exact, case-sensitive), type_name (partial match, or '=Type' for that type and its subclasses only), element_name (x:Name substring), text (visible text content), property_filter, visible_only. Use root_handle to limit scope. Paths are shortened unless full_path=true.")]
     public async Task<object> WpfFindElementsDeep(
         string? root_handle = null,
         string? type_name = null,
@@ -150,7 +175,8 @@ public class WpfTools
         string? text = null,
         JsonElement? property_filter = null,
         bool visible_only = false,
-        string? automation_id = null)
+        string? automation_id = null,
+        bool full_path = false)
     {
         if (string.IsNullOrEmpty(type_name) && string.IsNullOrEmpty(element_name) && string.IsNullOrEmpty(text) && automation_id == null)
         {
@@ -160,7 +186,7 @@ public class WpfTools
         var result = await _ipcBridge.FindElementsDeepAsync(
             root_handle, type_name, element_name, text,
             ToFilterDictionary(property_filter), visible_only, automation_id);
-        return result;
+        return full_path ? result : ShortenPaths(result);
     }
 
     private static Dictionary<string, string>? ToFilterDictionary(JsonElement? propertyFilter)
@@ -297,7 +323,7 @@ public class WpfTools
     }
 
     [McpServerTool]
-    [Description("Wait until an element matching the criteria satisfies a condition, polling in the target app so you don't have to sleep-and-retry. Identify the element with automation_id (exact, case-sensitive), type_name, element_name and/or text (same matching as wpf_find_elements). condition: 'visible' (default — element exists and is on screen), 'exists' (in the tree even if not visible), 'enabled' (visible and IsEnabled=true), 'hidden' (no matching visible element — e.g. a spinner disappeared). Returns matched (bool), waited_ms, and matched_handle/element_type when found. Use after a click that triggers async work (dialog opens, spinner clears, button enables) before the next step. timeout_ms default 10000 (max 25000); poll_interval_ms default 250.")]
+    [Description("Wait until an element matching the criteria satisfies a condition, polling in the target app so you don't have to sleep-and-retry. Identify the element with automation_id (exact, case-sensitive), type_name, element_name and/or text (same matching as wpf_find_elements: type_name is a partial match, so 'DataGridRow' also matches DataGridRowsPresenter; use '=DataGridRow' for that type and its subclasses only). condition: 'visible' (default — element exists and is on screen), 'exists' (in the tree even if not visible), 'enabled' (visible and IsEnabled=true), 'hidden' (no matching visible element — e.g. a spinner disappeared). Returns matched (bool), waited_ms, and matched_handle/element_type when found. Use after a click that triggers async work (dialog opens, spinner clears, button enables) before the next step. timeout_ms default 10000 (max 25000); poll_interval_ms default 250.")]
     public async Task<object> WpfWaitForElement(
         string? type_name = null,
         string? element_name = null,
@@ -555,7 +581,7 @@ public class WpfTools
     }
 
     [McpServerTool]
-    [Description("Select an item in a ComboBox, ListBox, ListView, DataGrid or TabControl by visible text (item_text, case-insensitive substring) or zero-based index. For a DataGrid, item_text matches any visible cell of a row (the texts wpf_read_grid returns; first matching row wins) and index is the wpf_read_grid row index. It sets the control's selection without mouse or keyboard input; verify the application reacted and use a physical click if it only handles user input. PREFER this over clicking for dropdowns/lists: it works even when items are virtualized (not yet in the visual tree) and raises proper selection events. On failure the error lists the available items. STATE-CHANGING." + InputTargetDescription)]
+    [Description("Select an item in a ComboBox, ListBox, ListView, DataGrid or TabControl by visible text (item_text, case-insensitive substring) or zero-based index. For a DataGrid, item_text matches any visible cell of a row (the texts wpf_read_grid returns; first matching row wins) and index is the wpf_read_grid row index. A selected DataGrid row is scrolled into view, made the current row and given keyboard focus, so a following wpf_send_keys to the grid (e.g. Enter) acts on that row. Selection is set without mouse or keyboard input; verify the application reacted and use a physical click if it only handles user input. PREFER this over clicking for dropdowns/lists: it works even when items are virtualized (not yet in the visual tree) and raises proper selection events. On failure the error lists the available items. STATE-CHANGING." + InputTargetDescription)]
     public async Task<object> WpfSelectItem(string? element_handle = null, string? item_text = null, int? index = null,
         string? automation_id = null, string? root_handle = null)
     {

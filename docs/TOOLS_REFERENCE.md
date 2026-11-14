@@ -141,12 +141,14 @@ rows are included. Read-only: selection, scroll position and data are unchanged.
 | `columns` | Optional exact headers or binding paths; default is every visible column in display order |
 
 The result contains `gridHandle`, `rowCount`, `offset`, `returned`, `hasMore`,
-`columns` (`index`, `header`, `bindingPath`, `converter`, `valueSource`), `rows` (`index` plus
+`columns` (`index`, `header`, `bindingPath`, `converter`, `sortMemberPath`, `valueSource`), `rows` (`index` plus
 `cells` in column order), `selectedIndices` and `currentRowIndex`. Row indices follow
 the current sorted/filtered items view and match `wpf_select_item` indices; the
 new-item placeholder row is excluded. `wpf_select_item` on a DataGrid matches
 `item_text` against these cell texts (any visible column, case-insensitive substring,
 first matching row), so a row found here can be selected by text or by `index`.
+The selected row is scrolled into view, becomes the current row and receives keyboard
+focus, so `wpf_send_keys` to the grid (for example `Enter`) then acts on that row.
 
 `bindingPath` is `.` when a column binds to the whole data item (the text then comes
 from its `converter`); multi-binding child paths are joined with `+`. Find grids with
@@ -546,6 +548,7 @@ AutomationId requests fail explicitly until it supports the filter.
 | `type_name` | string | No | Element type, partial match (e.g., "Button", "TextBox"). Prefix with `=` to match only that type and types derived from it: `=DataGrid` finds grids and DataGrid subclasses, not `DataGridCell` or `DataGridColumnHeader` |
 | `element_name` | string | No | x:Name of the element |
 | `automation_id` | string | No | Exact AutomationProperties.AutomationId, or x:Name for elements without one (case-sensitive, 1–2048 characters, nonblank) |
+| `full_path` | boolean | No | Return each result's complete root-to-element `path`. By default only the nearest ancestors are kept (`… > Parent > Element`) to keep responses small |
 | `root_handle` | string | No | Restrict search to this window or subtree |
 | `property_filter` | object | No | Property name/value pairs to filter by |
 

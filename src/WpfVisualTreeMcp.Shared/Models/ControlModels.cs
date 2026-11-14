@@ -83,6 +83,8 @@ public sealed class GridReadColumn
     public string? Header { get; set; }
     /// <summary>Binding path; "." when the binding targets the whole data item, child paths joined for multi-bindings.</summary>
     public string? BindingPath { get; set; }
+    /// <summary>The member read for valueSource "sortMemberPath" columns.</summary>
+    public string? SortMemberPath { get; set; }
     /// <summary>Type name of the binding's value converter, when it has one.</summary>
     public string? Converter { get; set; }
     /// <summary>"binding" (evaluated on the data item), "sortMemberPath" or "visual" (text of realized cells only).</summary>

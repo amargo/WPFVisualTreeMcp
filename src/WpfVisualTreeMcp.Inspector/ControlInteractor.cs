@@ -401,7 +401,7 @@ internal sealed class ControlInteractor
             selector.SelectedIndex = i;
             return new InteractionOutcome(
                 "Selector.SelectedIndex",
-                $"selected index {i}: '{DescribeItem(selector, i)}'");
+                $"selected index {i}: '{DescribeItem(selector, i)}'" + MakeGridRowCurrent(selector, i));
         }
 
         // DataGrid rows are matched on their cell texts (the same text wpf_read_grid returns),
@@ -416,7 +416,7 @@ internal sealed class ControlInteractor
             selector.SelectedIndex = row;
             return new InteractionOutcome(
                 "Selector.SelectedIndex",
-                $"selected row {row}: '{rowText}' (matched '{itemText}')");
+                $"selected row {row}: '{rowText}' (matched '{itemText}')" + MakeGridRowCurrent(selector, row));
         }
 
         for (int j = 0; j < count; j++)
@@ -436,6 +436,47 @@ internal sealed class ControlInteractor
         throw new InvalidOperationException(
             $"No item matching '{itemText}' among {count} item(s). " +
             $"First items: [{preview}{(count > 10 ? ", …" : "")}]");
+    }
+
+    /// <summary>
+    /// A user who selects a grid row also makes it the current row and puts keyboard focus in it,
+    /// which is what row actions (Enter, F2, application key handlers) act on. SelectedIndex alone
+    /// leaves the current cell and focus wherever they were.
+    /// </summary>
+    private static string MakeGridRowCurrent(Selector selector, int index)
+    {
+        if (selector is not DataGrid grid) return string.Empty;
+        var item = grid.Items[index];
+        if (item == System.Windows.Data.CollectionView.NewItemPlaceholder) return string.Empty;
+        try
+        {
+            var column = grid.CurrentCell.Column is { Visibility: Visibility.Visible } current
+                ? current
+                : grid.Columns.Where(c => c.Visibility == Visibility.Visible).OrderBy(c => c.DisplayIndex).FirstOrDefault();
+            if (column == null) return string.Empty;
+            grid.ScrollIntoView(item, column);
+            grid.CurrentCell = new DataGridCellInfo(item, column);
+            grid.UpdateLayout();
+            return FocusCurrentGridCell(grid)
+                ? "; row is current and has keyboard focus"
+                : "; row is current (keyboard focus could not be moved into it)";
+        }
+        catch (InvalidOperationException)
+        {
+            // The grid is mid-edit or regenerating containers; the selection itself succeeded.
+            return string.Empty;
+        }
+    }
+
+    /// <summary>Moves focus into the grid's current cell (or its row) when that container is realized.</summary>
+    private static bool FocusCurrentGridCell(DataGrid grid)
+    {
+        var info = grid.CurrentCell;
+        if (info.Item == null || info.Column == null) return false;
+        if (grid.ItemContainerGenerator.ContainerFromItem(info.Item) is not DataGridRow row) return false;
+        var cell = info.Column.GetCellContent(row)?.Parent as DataGridCell
+            ?? ControlOperations.Descendants(row).OfType<DataGridCell>().FirstOrDefault(c => c.Column == info.Column);
+        return cell != null && cell.Focus() || row.Focus();
     }
 
     /// <summary>
@@ -545,6 +586,9 @@ internal sealed class ControlInteractor
     private static bool FocusForKeyboardInput(UIElement element)
     {
         Window.GetWindow(element)?.Activate();
+        // Keys aimed at a grid belong in its current cell: focusing the grid itself would move
+        // focus out of the row and application key handlers would not see a cell as the source.
+        if (element is DataGrid grid && FocusCurrentGridCell(grid)) return true;
         ScrollIntoView(element);
         var focused = element.Focus();
         Keyboard.Focus(element);

@@ -52,6 +52,22 @@ public class GridReadAndScreenshotDefaultsTests
     }
 
     [Fact]
+    public async Task WpfFindElements_ShortensPathsUnlessTheFullPathIsRequested()
+    {
+        const string path = "Window[Main] > Grid > DockPanel > DataGrid[Orders] > Border > TextBlock";
+        _bridge.Setup(x => x.FindElementsAsync(null, "TextBlock", null, null, null, false, 50, null))
+            .ReturnsAsync(() => new FindElementsResult { Count = 1, Elements = { new FoundElement { Handle = "h", Path = path } } });
+
+        var compact = (FindElementsResult)await Tools.WpfFindElements(type_name: "TextBlock");
+        compact.Elements[0].Path.Should().Be("… > DataGrid[Orders] > Border > TextBlock");
+
+        var full = (FindElementsResult)await Tools.WpfFindElements(type_name: "TextBlock", full_path: true);
+        full.Elements[0].Path.Should().Be(path);
+
+        WpfTools.ShortenPath("Window > Button").Should().Be("Window > Button", "short paths are left alone");
+    }
+
+    [Fact]
     public async Task WpfCaptureScreenshot_DefaultsToCompactBoundsAndReportsPayloadSize()
     {
         _bridge.Setup(x => x.CaptureScreenshotAsync(null, 1280, 800, "auto", false))

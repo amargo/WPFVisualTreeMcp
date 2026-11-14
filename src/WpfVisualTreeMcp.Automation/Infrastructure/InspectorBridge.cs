@@ -659,8 +659,10 @@ public partial class InspectorBridge : IIpcBridge
     {
         if ((elementHandle == null) == (automationId == null))
             throw CreateException("Specify exactly one of element_handle or automation_id.");
-        if (elementHandle != null && (string.IsNullOrWhiteSpace(elementHandle) || rootHandle != null))
-            throw CreateException("element_handle cannot be blank and root_handle is only supported with automation_id.");
+        if (elementHandle != null && string.IsNullOrWhiteSpace(elementHandle))
+            throw CreateException("element_handle cannot be blank.");
+        if (elementHandle != null && rootHandle != null)
+            throw CreateException("root_handle only scopes an automation_id lookup. Omit root_handle when passing element_handle.");
         if (elementHandle != null) return elementHandle;
 
         var session = EnsureConnected();
@@ -695,6 +697,23 @@ public partial class InspectorBridge : IIpcBridge
         if (!response.Success || string.IsNullOrEmpty(response.ElementHandle))
             throw CreateException(response.Error ?? "Inspector did not resolve the AutomationId.");
         return response.ElementHandle;
+    }
+
+    private static string EmptyResponseError(int processId)
+    {
+        // A request that closes the application (Alt+F4, an exit shortcut) ends the pipe before a reply.
+        try
+        {
+            using var process = System.Diagnostics.Process.GetProcessById(processId);
+            if (process.WaitForExit(1000))
+                return $"The application (process {processId}) exited before answering; if this request closed it, that is the expected result. Handles from that process are no longer valid.";
+        }
+        catch (ArgumentException)
+        {
+            return $"The application (process {processId}) exited before answering; if this request closed it, that is the expected result. Handles from that process are no longer valid.";
+        }
+        catch (InvalidOperationException) { }
+        return "Empty response from inspector: the application closed the connection without answering but is still running. Retry, and reattach if it keeps failing.";
     }
 
     private async Task ValidateTypeNameAsync(int processId, string? typeName)
@@ -884,7 +903,7 @@ public partial class InspectorBridge : IIpcBridge
 
             if (string.IsNullOrEmpty(responseJson))
             {
-                return new TResponse { Success = false, Error = "Empty response from inspector" };
+                return new TResponse { Success = false, Error = EmptyResponseError(processId) };
             }
 
             var response = IpcSerializer.DeserializeResponse<TResponse>(responseJson);

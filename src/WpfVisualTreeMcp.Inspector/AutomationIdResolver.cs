@@ -35,7 +35,41 @@ internal static class AutomationIdResolver
     }
 
     internal static DependencyObject Resolve(string automationId, IEnumerable<DependencyObject> roots)
-        => ResolveOrDefault(automationId, roots) ?? throw new InvalidOperationException("AutomationId '" + automationId + "' was not found in the requested scope." + NotFoundHint);
+        => ResolveOrDefault(automationId, roots) ?? throw new InvalidOperationException(NotFoundMessage(automationId, roots));
+
+    internal static string NotFoundMessage(string automationId, IEnumerable<DependencyObject> roots) =>
+        "AutomationId '" + automationId + "' was not found in the requested scope."
+        + (DescribeUnrendered(automationId, roots) ?? NotFoundHint);
+
+    /// <summary>
+    /// Explains an ID that exists only in the logical tree: items of a closed menu, an unselected
+    /// tab or a collapsed container have no visuals yet, so they cannot be targeted until opened.
+    /// </summary>
+    internal static string? DescribeUnrendered(string automationId, IEnumerable<DependencyObject> roots)
+    {
+        var queue = new Queue<DependencyObject>(roots);
+        var visited = new HashSet<DependencyObject>();
+        var clock = Stopwatch.StartNew();
+        while (queue.Count > 0 && visited.Count < 10000 && clock.ElapsedMilliseconds < 1000)
+        {
+            var element = queue.Dequeue();
+            if (!visited.Add(element)) continue;
+            if (string.Equals(EffectiveId(element), automationId, StringComparison.Ordinal))
+            {
+                var menus = new List<string>();
+                for (var parent = LogicalTreeHelper.GetParent(element); parent != null; parent = LogicalTreeHelper.GetParent(parent))
+                    if (parent is System.Windows.Controls.MenuItem menu)
+                        menus.Insert(0, TreeWalker.GetSearchableText(menu) ?? menu.Name ?? "MenuItem");
+                return menus.Count > 0
+                    ? " A " + element.GetType().Name + " with this ID exists inside the closed menu '" + string.Join(" > ", menus)
+                      + "'. Open that menu first (click its MenuItem), then target the item."
+                    : " A " + element.GetType().Name + " with this ID exists but is not rendered yet (closed popup, unselected tab or collapsed container). Open its container first.";
+            }
+            foreach (var child in LogicalTreeHelper.GetChildren(element))
+                if (child is DependencyObject next) queue.Enqueue(next);
+        }
+        return null;
+    }
 
     internal static DependencyObject? ResolveOrDefault(string automationId, IEnumerable<DependencyObject> roots, Func<DependencyObject, string>? handleOf = null)
     {

@@ -49,7 +49,8 @@ internal static class GridReader
             Columns = columns.Select(c => new GridReadColumn
             {
                 Index = c.Index, Header = ControlOperations.Display(c.Column.Header),
-                BindingPath = BindingPath(c.Column), Converter = Converter(c.Column), ValueSource = c.Source
+                BindingPath = BindingPath(c.Column), Converter = Converter(c.Column), ValueSource = c.Source,
+                SortMemberPath = c.Source == "sortMemberPath" ? c.Column.SortMemberPath : null
             }).ToList(),
             SelectedIndices = ControlOperations.SelectedIndices(grid),
             CurrentRowIndex = currentRow

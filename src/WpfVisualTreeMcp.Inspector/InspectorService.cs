@@ -479,7 +479,7 @@ public partial class InspectorService : IDisposable
                 ?? throw new InvalidOperationException(StaleHandleError(request.RootHandle)) };
         var element = AutomationIdResolver.ResolveOrDefault(request.AutomationId, roots, _treeWalker.GetOrCreateHandle);
         if (element == null)
-            return new ResolveAutomationIdResponse { Success = false, NotFound = true, Error = "AutomationId '" + request.AutomationId + "' was not found in the requested scope." + AutomationIdResolver.NotFoundHint };
+            return new ResolveAutomationIdResponse { Success = false, NotFound = true, Error = AutomationIdResolver.NotFoundMessage(request.AutomationId, roots) };
         return new ResolveAutomationIdResponse { ElementHandle = _treeWalker.GetOrCreateHandle(element) };
     }
 
