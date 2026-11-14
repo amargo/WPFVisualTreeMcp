@@ -495,6 +495,14 @@ public class TreeWalker
         }
     }
 
+    internal static bool IsOrDerivesFrom(Type type, string name)
+    {
+        for (Type? current = type; current != null; current = current.BaseType)
+            if (current.Name.Equals(name, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(current.FullName, name, StringComparison.OrdinalIgnoreCase)) return true;
+        return false;
+    }
+
     private static bool MatchesCriteria(DependencyObject element, FindCriteria criteria)
     {
         var type = element.GetType();
@@ -507,8 +515,11 @@ public class TreeWalker
         {
             var fullTypeName = type.FullName ?? type.Name;
             // Use IndexOf for .NET Framework 4.8 compatibility (no Contains with StringComparison)
-            var typeMatches = fullTypeName.IndexOf(criteria.TypeName, StringComparison.OrdinalIgnoreCase) >= 0 ||
-                              type.Name.Equals(criteria.TypeName, StringComparison.OrdinalIgnoreCase);
+            // A leading '=' asks for the type itself or a type derived from it instead of a substring.
+            var typeMatches = criteria.TypeName![0] == '='
+                ? IsOrDerivesFrom(type, criteria.TypeName.Substring(1))
+                : fullTypeName.IndexOf(criteria.TypeName, StringComparison.OrdinalIgnoreCase) >= 0 ||
+                  type.Name.Equals(criteria.TypeName, StringComparison.OrdinalIgnoreCase);
             if (!typeMatches) return false;
         }
 

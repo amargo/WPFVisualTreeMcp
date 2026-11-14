@@ -149,6 +149,7 @@ public partial class InspectorBridge : IIpcBridge
         };
 
         await ValidateAutomationIdAsync(session.ProcessId, automationId);
+        await ValidateTypeNameAsync(session.ProcessId, typeName);
         var response = await SendRequestAsync<FindElementsRequest, FindElementsResponse>(
             session.ProcessId, request);
 
@@ -177,6 +178,7 @@ public partial class InspectorBridge : IIpcBridge
         };
 
         await ValidateAutomationIdAsync(session.ProcessId, automationId);
+        await ValidateTypeNameAsync(session.ProcessId, typeName);
         var response = await SendRequestAsync<FindElementsDeepRequest, FindElementsDeepResponse>(
             session.ProcessId, request);
 
@@ -491,6 +493,7 @@ public partial class InspectorBridge : IIpcBridge
         };
 
         await ValidateAutomationIdAsync(session.ProcessId, automationId);
+        await ValidateTypeNameAsync(session.ProcessId, typeName);
         var response = await SendRequestAsync<WaitForElementRequest, WaitForElementResponse>(
             session.ProcessId, request);
 
@@ -684,6 +687,18 @@ public partial class InspectorBridge : IIpcBridge
         if (!response.Success || string.IsNullOrEmpty(response.ElementHandle))
             throw CreateException(response.Error ?? "Inspector did not resolve the AutomationId.");
         return response.ElementHandle;
+    }
+
+    private async Task ValidateTypeNameAsync(int processId, string? typeName)
+    {
+        if (typeName == null || !typeName.StartsWith("=", StringComparison.Ordinal)) return;
+        if (typeName.Trim().Length == 1)
+            throw CreateException("type_name '=' needs a type name after it, for example '=DataGrid'.");
+        // An older Inspector would treat '=Type' as a substring and silently find nothing.
+        // Exact type matching shipped together with grid reads, so that capability covers it.
+        var response = await SendRequestAsync<GetCapabilitiesRequest, GetCapabilitiesResponse>(processId, new GetCapabilitiesRequest());
+        if (!response.Success || !response.GridRead)
+            throw CreateException("Exact type matching ('=Type') requires a newer Inspector than the one loaded in the attached app. Save your work, restart the app, and reattach using the updated server.");
     }
 
     private async Task ValidateAutomationIdAsync(int processId, string? automationId)

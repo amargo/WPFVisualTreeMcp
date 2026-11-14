@@ -340,7 +340,7 @@ public partial class InspectorService : IDisposable
     {
         return requestType switch
         {
-            "GetCapabilities" => new GetCapabilitiesResponse { CoordinatePointerInput = true, AutomationIdTargeting = true, AutomationIdOptionalResolution = true, AdvancedAutomation = true, PropertySubscriptions = true },
+            "GetCapabilities" => new GetCapabilitiesResponse { CoordinatePointerInput = true, AutomationIdTargeting = true, AutomationIdOptionalResolution = true, AdvancedAutomation = true, PropertySubscriptions = true, GridRead = true },
             "ResolveAutomationId" => HandleResolveAutomationId(data),
             "Record" => HandleRecord(data),
             "AssertElement" => HandleAssertElement(data),
@@ -358,6 +358,7 @@ public partial class InspectorService : IDisposable
             "WatchProperty" => HandleWatchProperty(data),
             "UnwatchProperty" => HandleUnwatchProperty(data),
             "ControlOperation" => HandleControlOperation(data),
+            "ReadGrid" => HandleReadGrid(data),
             "Window" => HandleWindow(data),
             "ExportTree" => HandleExportTree(data),
             "CaptureScreenshot" => HandleCaptureScreenshot(data, captureToken),

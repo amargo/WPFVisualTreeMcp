@@ -404,6 +404,21 @@ internal sealed class ControlInteractor
                 $"selected index {i}: '{DescribeItem(selector, i)}'");
         }
 
+        // DataGrid rows are matched on their cell texts (the same text wpf_read_grid returns),
+        // including virtualized rows; the data item's ToString() is rarely what the user sees.
+        if (selector is DataGrid grid)
+        {
+            var row = GridReader.FindRow(grid, itemText!, out var rowText);
+            if (row < 0)
+                throw new InvalidOperationException(
+                    $"No row with a cell containing '{itemText}' among {count} row(s). " +
+                    "Read the rows with wpf_read_grid and select by index.");
+            selector.SelectedIndex = row;
+            return new InteractionOutcome(
+                "Selector.SelectedIndex",
+                $"selected row {row}: '{rowText}' (matched '{itemText}')");
+        }
+
         for (int j = 0; j < count; j++)
         {
             var text = DescribeItem(selector, j);
@@ -433,6 +448,9 @@ internal sealed class ControlInteractor
     {
         var item = selector.Items[index];
         if (item == null) return "(null)";
+
+        if (selector is DataGrid grid && item != System.Windows.Data.CollectionView.NewItemPlaceholder)
+            return GridReader.DescribeRow(grid, index);
 
         if (item is ContentControl cc && cc.Content != null)
             return cc.Content.ToString() ?? cc.GetType().Name;

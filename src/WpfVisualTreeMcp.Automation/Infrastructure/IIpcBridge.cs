@@ -134,6 +134,12 @@ public interface IIpcBridge
     Task<ScreenshotResult> CaptureScreenshotAsync(string? elementHandle, int maxWidth, int maxHeight, string mode = "auto", bool fullContent = false);
 
     /// <summary>
+    /// Reads a page of DataGrid rows as text from the data items (no scrolling, virtualized rows included).
+    /// <paramref name="columns"/> optionally selects columns by exact header or binding path.
+    /// </summary>
+    Task<GridReadResult> ReadGridAsync(string elementHandle, int offset, int limit, IReadOnlyList<string>? columns = null);
+
+    /// <summary>
     /// Gets the DataContext chain for an element.
     /// </summary>
     Task<DataContextResult> GetDataContextAsync(string elementHandle);

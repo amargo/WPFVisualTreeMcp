@@ -28,7 +28,7 @@ public static class CliRunner
         "binding-errors", "clear-binding-errors", "data-context", "resources",
         "styles", "watch-property", "highlight", "click", "move-mouse", "scroll", "drag", "touch", "select-item", "set-text",
         "send-keys", "wait-for", "set-property", "revert-property", "snapshot", "diff",
-        "evaluate-binding", "explain-triggers", "layout", "export", "screenshot",
+        "evaluate-binding", "explain-triggers", "layout", "export", "screenshot", "read-grid",
         "record", "get-recording", "assert", "replay", "export-test",
     };
 
@@ -573,12 +573,27 @@ public static class CliRunner
                     break;
                 }
 
+                case "read-grid":
+                {
+                    await AttachAsync(processManager, cli, false);
+                    var gridOffset = cli.GetInt("offset", 0);
+                    var gridLimit = cli.GetInt("limit", 50);
+                    if (gridOffset < 0 || gridLimit is < 1 or > WpfVisualTreeMcp.Shared.Ipc.ReadGridRequest.MaxLimit)
+                        throw new ArgumentException("--offset must be >= 0 and --limit 1-500.");
+                    var gridColumns = cli.GetStringOrNull("columns")?
+                        .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+                    var gridHandle = await bridge.ResolveElementHandleAsync(cli.GetStringOrNull("handle"),
+                        cli.GetStringOrNull("automation-id"), cli.GetStringOrNull("root"));
+                    WriteJson(await bridge.ReadGridAsync(gridHandle, gridOffset, gridLimit, gridColumns), cli);
+                    break;
+                }
+
                 case "screenshot":
                 {
                     await AttachAsync(processManager, cli, false);
                     var fullContent = cli.Flags.Contains("full-content");
-                    var maxW = Math.Clamp(cli.GetInt("max-width", 1920), 1, fullContent ? 16384 : 3840);
-                    var maxH = Math.Clamp(cli.GetInt("max-height", 1080), 1, fullContent ? 16384 : 2160);
+                    var maxW = Math.Clamp(cli.GetInt("max-width", WpfTools.DefaultScreenshotWidth), 1, fullContent ? 16384 : 3840);
+                    var maxH = Math.Clamp(cli.GetInt("max-height", WpfTools.DefaultScreenshotHeight), 1, fullContent ? 16384 : 2160);
                     var shotMode = cli.GetString("mode", "auto").ToLowerInvariant();
                     if (shotMode != "auto" && shotMode != "render" && shotMode != "screen")
                         throw new ArgumentException("--mode must be 'auto', 'render' or 'screen'.");
@@ -592,12 +607,14 @@ public static class CliRunner
                     var pid = processManager.CurrentSession!.ProcessId;
                     var outPath = cli.GetStringOrNull("out")
                         ?? Path.Combine(Environment.CurrentDirectory, $"wpf-screenshot-{pid}.png");
-                    await File.WriteAllBytesAsync(outPath, Convert.FromBase64String(shot.ImageBase64));
+                    var shotBytes = Convert.FromBase64String(shot.ImageBase64);
+                    await File.WriteAllBytesAsync(outPath, shotBytes);
                     WriteJson(new
                     {
                         path = Path.GetFullPath(outPath),
                         width = shot.Width,
                         height = shot.Height,
+                        bytes = shotBytes.Length,
                         elementType = shot.ElementType ?? "Window",
                         captureMode = shot.CaptureMode,
                         detail = shot.Detail,
@@ -723,6 +740,7 @@ COMMANDS
   layout        --pid --handle H
   export        --pid [--handle H] [--format json|xaml] [--out FILE]
   screenshot    --pid [--handle H] [--out FILE] [--max-width N] [--max-height N] [--mode auto|render|screen] [--full-content]
+  read-grid     --pid (--handle H | --automation-id ID [--root H]) [--offset N] [--limit N] [--columns 'A,B']   (DataGrid rows as text)
 
 Element handles (elem_XXXXXXXX) come from 'tree' / 'find' and stay valid while
 the target app keeps running.
@@ -777,7 +795,8 @@ TYPICAL WORKFLOW
             "props" => "props --pid <id> --handle <handle>\n  List the dependency properties of an element.",
             "find" => "find --pid <id> [--automation-id ID] [--type T] [--name N] [--text S] [--visible-only] [--root H] [--max N] [--filter JSON]\n"
                     + "  Search elements (up to --max, default 50). Filters combine with AND:\n"
-                    + "  --type: type name (partial match, e.g. Button)\n"
+                    + "  --type: type name (partial match, e.g. Button); =Type matches that type and\n"
+                    + "    its subclasses only (e.g. =DataGrid skips DataGridCell)\n"
                     + "  --text: visible text content (button caption, TextBlock text, window\n"
                     + "          title, tooltip; case-insensitive substring)\n"
                     + "  --automation-id: exact, case-sensitive AutomationProperties.AutomationId; --name: x:Name substring\n"
@@ -833,8 +852,10 @@ TYPICAL WORKFLOW
                      + "  Windows desktop and application touch support. CHANGES application state.\n"
                      + "  Success confirms injection; verify the application's response separately.",
             "select-item" => "select-item --pid <id> (--handle H | --automation-id ID [--root H]) (--item-text <text> | --index <n>)\n"
-                           + "  Select an item in a ComboBox/ListBox/ListView/TabControl by visible\n"
-                           + "  text (case-insensitive substring) or zero-based index. Works with\n"
+                           + "  Select an item in a ComboBox/ListBox/ListView/DataGrid/TabControl by\n"
+                           + "  visible text (case-insensitive substring) or zero-based index. For a\n"
+                           + "  DataGrid the text matches any visible cell of a row, as read-grid\n"
+                           + "  returns it, and the index is the read-grid row index. Works with\n"
                            + "  virtualized items and raises proper selection events — prefer this\n"
                            + "  over clicking dropdown items. On failure the error lists available\n"
                            + "  items. This command CHANGES application state.",
@@ -902,8 +923,19 @@ TYPICAL WORKFLOW
                                 + "  attribute that property's value to the style setter or active trigger\n"
                                 + "  that set it (or local/inherited/default).",
             "layout" => "layout --pid <id> --handle <handle>\n  Show layout info (sizes, margin, alignment, visibility).",
+            "read-grid" => "read-grid --pid <id> (--handle <handle> | --automation-id <id> [--root <handle>]) [--offset N] [--limit 1-500] [--columns 'Header A,Header B']\n"
+                          + "  Read DataGrid rows as text from the data items through the column bindings,\n"
+                          + "  including virtualized/off-screen rows; no scrolling, no screenshot. Prints\n"
+                          + "  rowCount, columns and rows ({index, cells[]} in column order), selectedIndices\n"
+                          + "  and hasMore. Page with --offset/--limit (default 0/50). --columns restricts\n"
+                          + "  output to exact headers or binding paths (comma-separated). The target may be\n"
+                          + "  the grid, an element inside it, or a container with exactly one DataGrid.\n"
+                          + "  Template columns without a binding (valueSource 'visual') only have text for\n"
+                          + "  rows on screen. Standard WPF DataGrid only. Read-only.",
             "screenshot" => "screenshot --pid <id> [--handle <handle>] [--out <file>] [--max-width N] [--max-height N] [--mode auto|render|screen] [--full-content]\n"
                            + "  Capture the window (or one element) as PNG and print the file path.\n"
+                           + "  Output is downscaled to fit 1280x800 by default; pass --handle to capture one\n"
+                           + "  element, or raise --max-width/--max-height (up to 3840x2160) for small text.\n"
                            + "  --mode auto (default): screen for native HwndHost content, render otherwise.\n"
                            + "  --mode render: off-screen re-render; rejects native content; works when covered,\n"
                            + "  but cannot see open popups/dropdowns/context menus.\n"

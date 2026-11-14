@@ -40,7 +40,7 @@ python scripts/test_automation_package.py --packages artifacts/packages
 AI Agent (Claude Code)
     ↓ [MCP Protocol - JSON-RPC over stdio]
 MCP Server (.NET 8.0)
-    ├─ WpfTools (38 tools)
+    ├─ WpfTools (39 tools)
     ├─ ProcessManager (discovers WPF processes)
     └─ NamedPipeBridge (IPC)
         ↓ [Named Pipes: wpf_inspector_{pid}]
@@ -61,8 +61,8 @@ Target WPF Application (.NET Framework)
 | Component | Location | Purpose |
 |-----------|----------|---------|
 | MCP Server Entry | `src/WpfVisualTreeMcp.Server/Program.cs` | Server init with MCP SDK; routes to CLI mode if args present |
-| Tool Definitions | `src/WpfVisualTreeMcp.Server/WpfTools.cs` | 38 tools with `[McpServerTool]` attributes |
-| CLI Front-End | `src/WpfVisualTreeMcp.Server/Cli/CliRunner.cs` | 38 inspection/workflow commands plus CLI-only `update` |
+| Tool Definitions | `src/WpfVisualTreeMcp.Server/WpfTools.cs` | 39 tools with `[McpServerTool]` attributes |
+| CLI Front-End | `src/WpfVisualTreeMcp.Server/Cli/CliRunner.cs` | 39 inspection/workflow commands plus CLI-only `update` |
 | Workflow Recording | `WorkflowRecorder.cs`, `StableSelectors.cs`, `InspectorService.Workflow.cs` | Inspector-owned recording and gated replay; exact selectors, explicit waits/assertions |
 | Test Export | `src/WpfVisualTreeMcp.Server/WorkflowTestExporter.cs` | Data-only workflow JSON plus a standalone xUnit project using CLI replay |
 | Aggregate Diagnostics | `src/WpfVisualTreeMcp.Inspector/DiagnosticReporter.cs` | Bounded realized-tree scan, current binding/validation errors and separate process-wide trace history |
@@ -72,6 +72,7 @@ Target WPF Application (.NET Framework)
 | Property Writer | `src/WpfVisualTreeMcp.Inspector/PropertyWriter.cs` | Live-edits dependency properties (TypeConverter coercion) with a per-session undo stack (restores prior binding/local/default) |
 | Snapshot / Diff | `TreeWalker.CaptureSnapshot` + `InspectorService.ComputeDiff` | Capture a subtree's curated state keyed by element handle; diff two snapshots (handle stable → changed/added/removed) |
 | Injector Helper | `src/WpfVisualTreeMcp.InjectorHelper/Program.cs` | 32-bit .NET 8 helper exe spawned by `ProcessInjector` for cross-arch injection (v0.6.0) |
+| Grid Reader | `src/WpfVisualTreeMcp.Inspector/GridReader.cs` | `wpf_read_grid` / CLI `read-grid`: pages DataGrid rows as text from the data items via column bindings (no scrolling; virtualized rows included) |
 | C# Test SDK | `src/WpfVisualTreeMcp.Automation/` | WpfApplication/WpfElement, async actions and exact property/predicate waits; standalone NuGet payload |
 | IPC Bridge | `src/WpfVisualTreeMcp.Automation/Infrastructure/InspectorBridge.cs` | Shared pipe transport; Server/Services/NamedPipeBridge adapts errors to MCP |
 | Process Manager | `src/WpfVisualTreeMcp.Automation/Infrastructure/ProcessManager.cs` | Shared WPF process discovery and attachment |
@@ -182,7 +183,7 @@ The Inspector strips UTF-8 BOM (0xEF 0xBB 0xBF) before JSON parsing to prevent d
   `screen` uses GDI BitBlt of the on-screen pixels (includes open Popups, ComboBox
   dropdowns, context menus and tooltips — requires the window visible and unobstructed)
 - DPI-aware via `PresentationSource.FromVisual`
-- Downscales if exceeding `max_width`/`max_height` (default 1920x1080)
+- Downscales if exceeding `max_width`/`max_height` (MCP/CLI default 1280x800 to keep image payloads small; SDK methods keep 1920x1080). The MCP result text reports the PNG size and hints at element capture when it is large. JPEG was measured larger than PNG for WPF UI and is deliberately not offered
 - Returns MCP `ImageContentBlock` (base64 PNG) — Claude sees the image directly
 - `full_content=true` / `--full-content` is render-only and may temporarily scroll
   virtualized controls, restoring offsets in `finally`. It uses the interaction
@@ -236,7 +237,7 @@ The server uses the official Microsoft/Anthropic MCP SDK. Configure in `.mcp.jso
 The server executable doubles as a command-line tool. `WpfVisualTreeMcp.Server.exe`
 with **no arguments** runs the MCP stdio server; with **any recognised subcommand**
 it runs a single one-shot CLI command instead (`Program.cs` checks `args[0]` via
-`CliRunner.IsCliCommand`). This gives the same 38 capabilities without an MCP
+`CliRunner.IsCliCommand`). This gives the same 39 capabilities without an MCP
 connection — useful when the MCP server is not connected, for scripting, or for
 verifying the pipeline manually.
 

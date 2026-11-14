@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `wpf_read_grid` / CLI `read-grid`: page standard WPF DataGrid rows as text. Values
+  are evaluated from the data items through the column bindings (converters and
+  `StringFormat` in the grid's language), so virtualized rows are read without
+  scrolling or screenshots. Supports offset/limit paging, column selection by header
+  or binding path, selection/current-row indices, and targets inside or around the
+  grid. Older Inspectors are rejected with restart guidance. Columns report the
+  binding path (`.` for whole-item bindings) and converter type.
+- `type_name` in find/deep-find/wait accepts `=Type` to match only that type and its
+  subclasses (for example `=DataGrid` instead of every type containing "DataGrid").
+
+### Changed
+
+- `wpf_select_item` / CLI `select-item` on a DataGrid match `item_text` against the
+  row's visible cell texts (as `wpf_read_grid` returns them, virtualized rows
+  included) instead of the data item's `ToString()`.
+
+- `wpf_capture_screenshot` and CLI `screenshot` default to 1280x800 bounds instead of
+  1920x1080 to reduce image payloads; limits are unchanged and the SDK defaults are
+  retained. The tool description steers agents to text tools and element capture
+  first; results report the PNG size (CLI: `bytes`) and flag large images.
+
 ## [0.20.0] - 2026-10-25
 
 ### Added

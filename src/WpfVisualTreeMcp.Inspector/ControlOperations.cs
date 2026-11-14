@@ -117,7 +117,7 @@ internal sealed class ControlOperations
         return new ControlResult { Changed = !before.SequenceEqual(after), SelectedIndices = after };
     }
 
-    private static List<int> SelectedIndices(Selector selector)
+    internal static List<int> SelectedIndices(Selector selector)
     {
         IEnumerable<object> items = selector switch
         {
@@ -191,7 +191,7 @@ internal sealed class ControlOperations
         };
     }
 
-    private static string? CellText(DataGridCell cell)
+    internal static string? CellText(DataGridCell cell)
     {
         // Preserve whitespace/empty strings for ordinary text columns; searchable text is intentionally normalized.
         var content = cell.Content;
@@ -283,7 +283,7 @@ internal sealed class ControlOperations
         return formatted;
     }
 
-    private static object? ReadPath(object? item, string path)
+    internal static object? ReadPath(object? item, string path)
     {
         foreach (var part in path.Split('.'))
         {
@@ -294,8 +294,8 @@ internal sealed class ControlOperations
         }
         return item;
     }
-    private static string? Format(object? value) => value == null ? null : Convert.ToString(value, CultureInfo.InvariantCulture);
-    private static string? Display(object? value) => value is DependencyObject d ? TreeWalker.GetSearchableText(d) : Format(value);
+    internal static string? Format(object? value) => value == null ? null : Convert.ToString(value, CultureInfo.InvariantCulture);
+    internal static string? Display(object? value) => value is DependencyObject d ? TreeWalker.GetSearchableText(d) : Format(value);
 
     private static DataGridColumn ResolveColumn(DataGrid grid, ColumnLocator locator)
     {
@@ -312,7 +312,7 @@ internal sealed class ControlOperations
         return matches[0];
     }
 
-    private static IEnumerable<DependencyObject> Descendants(DependencyObject root)
+    internal static IEnumerable<DependencyObject> Descendants(DependencyObject root)
     {
         var stack = new Stack<DependencyObject>(); stack.Push(root);
         while (stack.Count > 0)

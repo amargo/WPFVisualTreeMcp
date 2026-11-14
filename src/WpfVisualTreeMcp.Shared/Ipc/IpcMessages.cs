@@ -31,6 +31,7 @@ public class GetCapabilitiesResponse : IpcResponse
     public bool AutomationIdOptionalResolution { get; set; }
     public bool AdvancedAutomation { get; set; }
     public bool PropertySubscriptions { get; set; }
+    public bool GridRead { get; set; }
 }
 
 public class ResolveAutomationIdRequest : IpcRequest
