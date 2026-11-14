@@ -18,9 +18,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   binding path (`.` for whole-item bindings) and converter type.
 - `type_name` in find/deep-find/wait accepts `=Type` to match only that type and its
   subclasses (for example `=DataGrid` instead of every type containing "DataGrid").
+- Server and Inspector compare a feature level: `wpf_attach` reports
+  `inspector_compatibility`, and errors from a stale Inspector (or stale server) say
+  which half to refresh.
+- `wpf_read_grid` can wait for data: `min_rows` / `contains_text` with `timeout_ms`.
+- `wpf_find_elements` filters `on_screen` (inside the scroll viewport and window) and
+  `has_text`.
+- `scripts/Deploy-Local.ps1` rebuilds the Release server while it is in use.
 
 ### Changed
 
+- `wpf_send_keys` sends keys only once the application verifiably owns the foreground
+  and focus is inside the target, instead of typing into whichever window is in front;
+  the result warns when WPF never received the key (global hotkey, other window).
+- `wpf_read_grid` returns the displayed text of combo columns that define their own
+  `ItemsSource` instead of the bound key.
+- `wpf_get_binding_errors` merges identical errors with `occurrences` / `firstSeen`.
 - `wpf_select_item` on a DataGrid scrolls the row into view, makes it the current row
   and moves keyboard focus into it; keys sent to a grid go to its current cell, so
   `select_item` followed by `send_keys Enter` acts on the selected row.

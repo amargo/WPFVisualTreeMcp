@@ -16,6 +16,13 @@ internal sealed class PhysicalInputGuard
             throw new InvalidOperationException("The attached application lost foreground focus; input was stopped.");
     }
 
+    /// <summary>True when a window of this process is the OS foreground window, i.e. receives keyboard input.</summary>
+    public static bool OwnsForeground()
+    {
+        GetWindowThreadProcessId(GetForegroundWindow(), out var owner);
+        return owner == (uint)Process.GetCurrentProcess().Id;
+    }
+
     public void EnsureMouseReleased()
     {
         foreach (int key in new[] { 1, 2, 4 })

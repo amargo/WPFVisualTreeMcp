@@ -454,12 +454,16 @@ internal sealed class ControlInteractor
                 ? current
                 : grid.Columns.Where(c => c.Visibility == Visibility.Visible).OrderBy(c => c.DisplayIndex).FirstOrDefault();
             if (column == null) return string.Empty;
+            var wasForeground = PhysicalInputGuard.OwnsForeground();
             grid.ScrollIntoView(item, column);
             grid.CurrentCell = new DataGridCellInfo(item, column);
             grid.UpdateLayout();
-            return FocusCurrentGridCell(grid)
+            var note = FocusCurrentGridCell(grid)
                 ? "; row is current and has keyboard focus"
                 : "; row is current (keyboard focus could not be moved into it)";
+            // Focusing a cell can activate its window; say so, since it changes what is in front.
+            return !wasForeground && PhysicalInputGuard.OwnsForeground()
+                ? note + "; focusing it brought the application to the foreground" : note;
         }
         catch (InvalidOperationException)
         {
@@ -543,16 +547,78 @@ internal sealed class ControlInteractor
     /// </summary>
     public InteractionOutcome SendKeys(UIElement? element, string keys)
     {
+        PrepareKeys(element, keys);
+        return SendPreparedKeys(keys);
+    }
+
+    /// <summary>
+    /// Validates the combo and focuses the target. Returns whether the application had to be
+    /// brought forward: the caller must confirm it owns the foreground before sending, because
+    /// OS key input always goes to the foreground window, whichever application that is.
+    /// </summary>
+    public bool PrepareKeys(UIElement? element, string keys)
+    {
         if (string.IsNullOrWhiteSpace(keys))
             throw new ArgumentException("Key combo is required (e.g. \"Ctrl+S\", \"Enter\", \"F5\").");
 
         if (element != null)
             EnsureInteractable(element, "given keys");
 
-        var (modifiers, key) = KeyComboParser.Parse(keys);
-
+        KeyComboParser.Parse(keys);
+        var wasForeground = PhysicalInputGuard.OwnsForeground();
         if (element != null)
             FocusForKeyboardInput(element);
+        return !wasForeground;
+    }
+
+    /// <summary>
+    /// Counts how often WPF receives the combo's main key, to tell delivered input from input that
+    /// went elsewhere. Modifiers do not count: a system-wide hotkey such as Alt+P lets Alt through
+    /// and swallows only the P.
+    /// </summary>
+    public sealed class KeyDeliveryProbe
+    {
+        private int _received;
+        private readonly NotifyInputEventHandler _handler;
+
+        internal KeyDeliveryProbe(Key expected)
+        {
+            _handler = (_, e) =>
+            {
+                if (e.StagingItem.Input.RoutedEvent != Keyboard.PreviewKeyDownEvent || e.StagingItem.Input is not KeyEventArgs key) return;
+                var actual = key.Key switch
+                {
+                    Key.System => key.SystemKey,
+                    Key.ImeProcessed => key.ImeProcessedKey,
+                    Key.DeadCharProcessed => key.DeadCharProcessedKey,
+                    _ => key.Key
+                };
+                if (actual == expected) System.Threading.Interlocked.Increment(ref _received);
+            };
+            InputManager.Current.PreNotifyInput += _handler;
+        }
+
+        public int Received => System.Threading.Volatile.Read(ref _received);
+
+        /// <summary>Must run on the thread that created the probe.</summary>
+        public void Stop() => InputManager.Current.PreNotifyInput -= _handler;
+    }
+
+    public KeyDeliveryProbe StartKeyDeliveryProbe(string keys) => new(KeyInterop.KeyFromVirtualKey(KeyComboParser.Parse(keys).Key));
+
+    /// <summary>
+    /// After the window has really become the foreground window, WPF may have restored focus to
+    /// whatever had it before. Puts keyboard focus back inside the target and reports whether it is there.
+    /// </summary>
+    public bool EnsureKeyboardFocusWithin(UIElement element)
+    {
+        if (!element.IsKeyboardFocusWithin) FocusForKeyboardInput(element);
+        return element.IsKeyboardFocusWithin;
+    }
+
+    public InteractionOutcome SendPreparedKeys(string keys)
+    {
+        var (modifiers, key) = KeyComboParser.Parse(keys);
 
         foreach (var modifier in modifiers)
             NativeMethods.KeyDown(modifier);

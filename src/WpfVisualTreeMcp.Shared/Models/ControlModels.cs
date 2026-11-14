@@ -74,6 +74,8 @@ public sealed class GridReadResult
     public List<int> SelectedIndices { get; set; } = new();
     public int? CurrentRowIndex { get; set; }
     public string? Note { get; set; }
+    /// <summary>Set when min_rows / contains_text were given: how long the read waited for them to hold.</summary>
+    public int? WaitedMs { get; set; }
 }
 
 public sealed class GridReadColumn

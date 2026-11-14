@@ -10,6 +10,7 @@ using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Documents;
 using System.Windows.Media;
+using WpfVisualTreeMcp.Shared.Ipc;
 
 namespace WpfVisualTreeMcp.Inspector;
 
@@ -546,11 +547,43 @@ public class TreeWalker
         {
             foreach (var kvp in criteria.PropertyFilter)
             {
-                if (!PropertyValueMatches(element, kvp.Key, kvp.Value))
-                    return false;
+                // '@' keys are state filters computed here, not CLR properties.
+                var matches = kvp.Key switch
+                {
+                    FindFilters.OnScreen => IsOnScreen(element),
+                    FindFilters.HasText => !string.IsNullOrWhiteSpace(GetSearchableText(element)),
+                    _ => PropertyValueMatches(element, kvp.Key, kvp.Value)
+                };
+                if (!matches) return false;
             }
         }
 
+        return true;
+    }
+
+    /// <summary>
+    /// True when part of the element lies inside every clipping ancestor (scroll viewports,
+    /// ClipToBounds containers and its window). IsVisible alone stays true for items scrolled
+    /// out of view.
+    /// </summary>
+    internal static bool IsOnScreen(DependencyObject element)
+    {
+        if (element is not UIElement ui || !ui.IsVisible || ui.RenderSize.Width <= 0 || ui.RenderSize.Height <= 0)
+            return false;
+        if (PresentationSource.FromVisual(ui) == null) return false;
+        for (var parent = VisualTreeHelper.GetParent(ui); parent != null; parent = VisualTreeHelper.GetParent(parent))
+        {
+            if (parent is not UIElement container) continue;
+            var clips = container is ScrollContentPresenter || container.ClipToBounds || VisualTreeHelper.GetParent(container) == null;
+            if (!clips) continue;
+            try
+            {
+                var bounds = ui.TransformToAncestor(container).TransformBounds(new Rect(ui.RenderSize));
+                bounds.Intersect(new Rect(container.RenderSize));
+                if (bounds.IsEmpty || bounds.Width <= 0 || bounds.Height <= 0) return false;
+            }
+            catch (InvalidOperationException) { return false; }
+        }
         return true;
     }
 

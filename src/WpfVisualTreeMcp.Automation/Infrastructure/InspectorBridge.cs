@@ -150,6 +150,7 @@ public partial class InspectorBridge : IIpcBridge
 
         await ValidateAutomationIdAsync(session.ProcessId, automationId);
         await ValidateTypeNameAsync(session.ProcessId, typeName);
+        await ValidateFilterAsync(session.ProcessId, propertyFilter);
         var response = await SendRequestAsync<FindElementsRequest, FindElementsResponse>(
             session.ProcessId, request);
 
@@ -179,6 +180,7 @@ public partial class InspectorBridge : IIpcBridge
 
         await ValidateAutomationIdAsync(session.ProcessId, automationId);
         await ValidateTypeNameAsync(session.ProcessId, typeName);
+        await ValidateFilterAsync(session.ProcessId, propertyFilter);
         var response = await SendRequestAsync<FindElementsDeepRequest, FindElementsDeepResponse>(
             session.ProcessId, request);
 
@@ -669,14 +671,6 @@ public partial class InspectorBridge : IIpcBridge
         await ValidateAutomationIdAsync(session.ProcessId, automationId);
         var response = await SendRequestAsync<ResolveAutomationIdRequest, ResolveAutomationIdResponse>(session.ProcessId,
             new ResolveAutomationIdRequest { AutomationId = automationId!, RootHandle = rootHandle });
-        if (response.NotFound)
-        {
-            // An older Inspector matches only explicit AutomationIds; say so instead of a bare "not found".
-            var capabilities = await SendRequestAsync<GetCapabilitiesRequest, GetCapabilitiesResponse>(session.ProcessId, new GetCapabilitiesRequest());
-            if (capabilities.Success && !capabilities.AutomationIdNameFallback)
-                throw CreateException((response.Error ?? "AutomationId was not found.") +
-                    " Note: the Inspector loaded in the attached app is older than this server and does not match x:Name. If the element only has an x:Name, restart the app and reattach, or target it with element_name / element_handle.");
-        }
         if (!response.Success || string.IsNullOrEmpty(response.ElementHandle))
             throw CreateException(response.Error ?? "Inspector did not resolve the AutomationId.");
         return response.ElementHandle!;
@@ -699,6 +693,24 @@ public partial class InspectorBridge : IIpcBridge
         return response.ElementHandle;
     }
 
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<int, int> _inspectorLevels = new();
+
+    /// <summary>
+    /// Says when the attached app's Inspector and this server are different builds. A loaded
+    /// Inspector cannot change within a process, so its level is read once per process.
+    /// </summary>
+    public async Task<string?> GetCompatibilityNoteAsync(int? processId = null)
+    {
+        var pid = processId ?? EnsureConnected().ProcessId;
+        if (!_inspectorLevels.TryGetValue(pid, out var level))
+        {
+            var capabilities = await SendRequestAsync<GetCapabilitiesRequest, GetCapabilitiesResponse>(pid, new GetCapabilitiesRequest());
+            if (!capabilities.Success) return null;
+            level = _inspectorLevels[pid] = capabilities.FeatureLevel;
+        }
+        return InspectorFeatures.CompatibilityNote(level);
+    }
+
     private static string EmptyResponseError(int processId)
     {
         // A request that closes the application (Alt+F4, an exit shortcut) ends the pipe before a reply.
@@ -714,6 +726,14 @@ public partial class InspectorBridge : IIpcBridge
         }
         catch (InvalidOperationException) { }
         return "Empty response from inspector: the application closed the connection without answering but is still running. Retry, and reattach if it keeps failing.";
+    }
+
+    private async Task ValidateFilterAsync(int processId, Dictionary<string, string>? propertyFilter)
+    {
+        // An older Inspector would look for a CLR property named '@onScreen' and silently match nothing.
+        if (propertyFilter == null || !propertyFilter.Keys.Any(key => key.StartsWith("@", StringComparison.Ordinal))) return;
+        if (await GetCompatibilityNoteAsync(processId) is { } note && _inspectorLevels.TryGetValue(processId, out var level) && level < InspectorFeatures.Level)
+            throw CreateException("on_screen / has_text filters are not available. " + note);
     }
 
     private async Task ValidateTypeNameAsync(int processId, string? typeName)
@@ -907,6 +927,9 @@ public partial class InspectorBridge : IIpcBridge
             }
 
             var response = IpcSerializer.DeserializeResponse<TResponse>(responseJson);
+            if (response is { Success: false, Error: not null } && request is not GetCapabilitiesRequest
+                && await GetCompatibilityNoteAsync(processId) is { } note)
+                response.Error += " Note: " + note;
             return response ?? new TResponse { Success = false, Error = "Failed to parse response" };
         }
         catch (OperationCanceledException) when (_cancellation.Value.IsCancellationRequested)

@@ -59,7 +59,7 @@ internal static class AutomationIdResolver
                 var menus = new List<string>();
                 for (var parent = LogicalTreeHelper.GetParent(element); parent != null; parent = LogicalTreeHelper.GetParent(parent))
                     if (parent is System.Windows.Controls.MenuItem menu)
-                        menus.Insert(0, TreeWalker.GetSearchableText(menu) ?? menu.Name ?? "MenuItem");
+                        menus.Insert(0, WithoutAccessKey(TreeWalker.GetSearchableText(menu)) ?? menu.Name ?? "MenuItem");
                 return menus.Count > 0
                     ? " A " + element.GetType().Name + " with this ID exists inside the closed menu '" + string.Join(" > ", menus)
                       + "'. Open that menu first (click its MenuItem), then target the item."
@@ -105,6 +105,19 @@ internal static class AutomationIdResolver
                 + (matches.Count > MaxCandidates ? "; …" : "")
                 + ". Use root_handle to scope the search (a window or container handle), or use one of these as element_handle.");
         return matches.Count == 1 ? matches[0] : null;
+    }
+
+    /// <summary>"_File" is shown as "File"; a doubled underscore is a literal one.</summary>
+    private static string? WithoutAccessKey(string? header)
+    {
+        if (string.IsNullOrEmpty(header)) return header;
+        var text = new System.Text.StringBuilder(header!.Length);
+        for (var i = 0; i < header.Length; i++)
+        {
+            if (header[i] != '_') { text.Append(header[i]); continue; }
+            if (i + 1 < header.Length && header[i + 1] == '_') { text.Append('_'); i++; }
+        }
+        return text.ToString();
     }
 
     private const int MaxCandidates = 6;

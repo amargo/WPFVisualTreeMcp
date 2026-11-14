@@ -133,6 +133,9 @@ public interface IIpcBridge
     /// </summary>
     Task<ScreenshotResult> CaptureScreenshotAsync(string? elementHandle, int maxWidth, int maxHeight, string mode = "auto", bool fullContent = false);
 
+    /// <summary>Guidance when the attached app's Inspector and this server are different builds; null when they match.</summary>
+    Task<string?> GetCompatibilityNoteAsync(int? processId = null);
+
     /// <summary>
     /// Reads a page of DataGrid rows as text from the data items (no scrolling, virtualized rows included).
     /// <paramref name="columns"/> optionally selects columns by exact header or binding path.

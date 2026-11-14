@@ -35,7 +35,7 @@ public static class CliRunner
     /// <summary>Options that never take a value (presence alone is meaningful).</summary>
     private static readonly HashSet<string> KnownFlags = new(StringComparer.OrdinalIgnoreCase)
     {
-        "auto-inject", "compact", "short-path", "verbose", "physical", "horizontal", "visible-only", "full-content", "all", "help", "h", "check", "status",
+        "auto-inject", "compact", "short-path", "on-screen", "has-text", "verbose", "physical", "horizontal", "visible-only", "full-content", "all", "help", "h", "check", "status",
     };
 
     private static string Exe =>
@@ -108,6 +108,7 @@ public static class CliRunner
                 case "attach":
                 {
                     var session = await AttachAsync(processManager, cli, cli.Flags.Contains("auto-inject"));
+                    var compatibility = session.InspectorReady ? await bridge.GetCompatibilityNoteAsync(session.ProcessId) : null;
                     WriteJson(new
                     {
                         success = session.InspectorReady,
@@ -116,6 +117,7 @@ public static class CliRunner
                         mainWindowHandle = session.MainWindowHandle,
                         inspectorStatus = session.InspectorStatus,
                         inspectorReady = session.InspectorReady,
+                        inspectorCompatibility = compatibility ?? (session.InspectorReady ? "Inspector matches this server build." : null),
                     }, cli);
                     return session.InspectorReady ? 0 : 1;
                 }
@@ -218,7 +220,7 @@ public static class CliRunner
                         cli.GetStringOrNull("type"),
                         cli.GetStringOrNull("name"),
                         cli.GetStringOrNull("text"),
-                        ParseFilter(cli.GetStringOrNull("filter")),
+                        WpfTools.WithStateFilters(ParseFilter(cli.GetStringOrNull("filter")), cli.Flags.Contains("on-screen"), cli.Flags.Contains("has-text")),
                         cli.Flags.Contains("visible-only"),
                         cli.GetInt("max", 50), cli.GetStringOrNull("automation-id"));
                     if (cli.Flags.Contains("short-path")) WpfTools.ShortenPaths(result);
@@ -237,7 +239,7 @@ public static class CliRunner
                         throw new ArgumentException("find-deep requires --type, --name, --text or --automation-id to bound the search.");
                     var deep = await bridge.FindElementsDeepAsync(
                         cli.GetStringOrNull("root"), type, name, text,
-                        ParseFilter(cli.GetStringOrNull("filter")),
+                        WpfTools.WithStateFilters(ParseFilter(cli.GetStringOrNull("filter")), cli.Flags.Contains("on-screen"), cli.Flags.Contains("has-text")),
                         cli.Flags.Contains("visible-only"), automationId);
                     if (cli.Flags.Contains("short-path")) WpfTools.ShortenPaths(deep);
                     WriteJson(deep, cli);
@@ -254,7 +256,7 @@ public static class CliRunner
                 case "binding-errors":
                 {
                     await AttachAsync(processManager, cli, false);
-                    WriteJson(await bridge.GetBindingErrorsAsync(), cli);
+                    WriteJson(WpfTools.MergeBindingErrors(await bridge.GetBindingErrorsAsync()), cli);
                     break;
                 }
 
@@ -590,9 +592,13 @@ public static class CliRunner
                         throw new ArgumentException("--offset must be >= 0 and --limit 1-500.");
                     var gridColumns = cli.GetStringOrNull("columns")?
                         .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-                    var gridHandle = await bridge.ResolveElementHandleAsync(cli.GetStringOrNull("handle"),
-                        cli.GetStringOrNull("automation-id"), cli.GetStringOrNull("root"));
-                    WriteJson(await bridge.ReadGridAsync(gridHandle, gridOffset, gridLimit, gridColumns), cli);
+                    WriteJson(await WpfTools.ReadGridWhenAsync(async () =>
+                    {
+                        var gridHandle = await bridge.ResolveElementHandleAsync(cli.GetStringOrNull("handle"),
+                            cli.GetStringOrNull("automation-id"), cli.GetStringOrNull("root"));
+                        return await bridge.ReadGridAsync(gridHandle, gridOffset, gridLimit, gridColumns);
+                    }, cli.GetInt("min-rows", 0), cli.GetStringOrNull("contains-text"),
+                        cli.GetInt("timeout", WpfTools.DefaultGridWaitMs), message => new ArgumentException(message)), cli);
                     break;
                 }
 
@@ -811,6 +817,8 @@ TYPICAL WORKFLOW
                     + "    or x:Name for elements without one (outside templates); --name: x:Name substring\n"
                     + "  --visible-only: exclude collapsed/hidden elements\n"
                     + "  --short-path: keep only the nearest ancestors in each result's path (also find-deep)\n"
+                    + "  --on-screen: only elements inside their scroll viewport and window (stricter\n"
+                    + "    than --visible-only); --has-text: only elements with text (both also find-deep)\n"
                     + "  --filter: JSON object of property=value pairs, e.g. '{\"IsEnabled\":\"True\"}'\n"
                     + "  Results include text, automationId, isVisible/isEnabled and screenBounds.\n"
                     + "  Example: find --pid 1234 --type Button --text Save --visible-only",
@@ -934,6 +942,7 @@ TYPICAL WORKFLOW
                                 + "  that set it (or local/inherited/default).",
             "layout" => "layout --pid <id> --handle <handle>\n  Show layout info (sizes, margin, alignment, visibility).",
             "read-grid" => "read-grid --pid <id> (--handle <handle> | --automation-id <id> [--root <handle>]) [--offset N] [--limit 1-500] [--columns 'Header A,Header B']\n"
+                          + "    [--min-rows N] [--contains-text S] [--timeout MS]\n"
                           + "  Read DataGrid rows as text from the data items through the column bindings,\n"
                           + "  including virtualized/off-screen rows; no scrolling, no screenshot. Prints\n"
                           + "  rowCount, columns and rows ({index, cells[]} in column order), selectedIndices\n"
@@ -941,7 +950,10 @@ TYPICAL WORKFLOW
                           + "  output to exact headers or binding paths (comma-separated). The target may be\n"
                           + "  the grid, an element inside it, or a container with exactly one DataGrid.\n"
                           + "  Template columns without a binding (valueSource 'visual') only have text for\n"
-                          + "  rows on screen. Standard WPF DataGrid only. Read-only.",
+                          + "  rows on screen. Standard WPF DataGrid only. Read-only.\n"
+                          + "  --min-rows / --contains-text wait (up to --timeout, default 5000, max 25000 ms)\n"
+                          + "  until the grid has that many rows and/or a returned cell contains the text;\n"
+                          + "  a grid that does not exist yet counts as not ready. Exit code 1 on timeout.",
             "screenshot" => "screenshot --pid <id> [--handle <handle>] [--out <file>] [--max-width N] [--max-height N] [--mode auto|render|screen] [--full-content]\n"
                            + "  Capture the window (or one element) as PNG and print the file path.\n"
                            + "  Output is downscaled to fit 1280x800 by default; pass --handle to capture one\n"

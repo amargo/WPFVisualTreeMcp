@@ -97,7 +97,7 @@ public class AutomationIdTests
     {
         var export = new MenuItem { Header = "Export" };
         AutomationProperties.SetAutomationId(export, "file.export");
-        var file = new MenuItem { Header = "File" };
+        var file = new MenuItem { Header = "_File" };
         file.Items.Add(export);
         var menu = new Menu();
         menu.Items.Add(file);
@@ -108,6 +108,32 @@ public class AutomationIdTests
             closed.Should().Throw<InvalidOperationException>().WithMessage("*not found*MenuItem*closed menu 'File'*Open that menu first*");
             var absent = () => AutomationIdResolver.Resolve("file.nothing", new[] { (DependencyObject)window });
             absent.Should().Throw<InvalidOperationException>().WithMessage("*not found*x:Name*");
+        }
+        finally { window.Close(); }
+    });
+
+    [Fact]
+    public Task State_filters_keep_only_on_screen_elements_with_text() => DiagnosticReporterTests.OnSta(() =>
+    {
+        var panel = new StackPanel();
+        for (var i = 0; i < 40; i++) panel.Children.Add(new TextBlock { Text = i % 2 == 0 ? "row " + i : "", Height = 20 });
+        var window = new Window { Content = new ScrollViewer { Content = panel }, Width = 200, Height = 150 };
+        window.Show(); window.UpdateLayout();
+        try
+        {
+            var walker = new TreeWalker();
+            int Count(params string[] filters) => System.Text.RegularExpressions.Regex.Matches(
+                walker.FindElements(window, new FindCriteria
+                {
+                    TypeName = "=TextBlock", VisibleOnly = true,
+                    PropertyFilter = filters.ToDictionary(f => f, _ => "true")
+                }, 1000), "\"handle\"").Count;
+
+            Count().Should().Be(40, "visible_only keeps rows scrolled out of the viewport");
+            var onScreen = Count(WpfVisualTreeMcp.Shared.Ipc.FindFilters.OnScreen);
+            onScreen.Should().BeInRange(1, 10);
+            Count(WpfVisualTreeMcp.Shared.Ipc.FindFilters.HasText).Should().Be(20);
+            Count(WpfVisualTreeMcp.Shared.Ipc.FindFilters.OnScreen, WpfVisualTreeMcp.Shared.Ipc.FindFilters.HasText).Should().BeLessThan(onScreen);
         }
         finally { window.Close(); }
     });

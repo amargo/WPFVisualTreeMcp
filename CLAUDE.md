@@ -147,6 +147,23 @@ Target WPF Application (.NET Framework)
   and replays in a fresh app. The optional gesture path requires the interactive desktop.
 - Uses direct byte I/O (not StreamReader/Writer) due to .NET Framework 4.8 deadlock issues
 
+### Server / Inspector compatibility
+- `InspectorFeatures.Level` (Shared) is compiled into both halves; the Inspector reports it in
+  `GetCapabilitiesResponse.FeatureLevel` (0 for older builds). `InspectorBridge` caches it per
+  process, appends a note to failed responses when the levels differ, and `wpf_attach` returns it
+  as `inspector_compatibility`. Raise the level whenever the server starts relying on new
+  Inspector behavior.
+- `scripts/Deploy-Local.ps1` rebuilds Release in place while MCP servers or inspected apps hold
+  the binaries (renames loaded files aside, removes stale copies once free).
+
+### Keyboard input
+- `SendKeys` runs through `HandleSendKeysAsync`: prepare/focus on the Dispatcher, wait off the
+  Dispatcher until the process owns the foreground (never send otherwise: OS keys go to the
+  foreground window of any application), confirm focus inside the target, send, then use
+  `KeyDeliveryProbe` (InputManager.PreNotifyInput) to warn when WPF saw no key down.
+  Do not pump the Dispatcher from inside an operation: a key that opens a modal dialog would
+  block the reply.
+
 ### Element Handles
 - Valid only within same Inspector session (same process lifetime)
 - Format: `elem_{counter:X8}` (hex counter, e.g., `elem_00000052`)

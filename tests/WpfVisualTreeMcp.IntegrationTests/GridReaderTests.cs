@@ -193,6 +193,31 @@ public class GridReaderTests
     }
 
     [Fact]
+    public Task Combo_columns_show_the_display_text_for_a_bound_key() => DiagnosticReporterTests.OnSta(() =>
+    {
+        var grid = CreateGrid(3);
+        var journals = new[] { new Journal { Key = 0, Label = "Vevő" }, new Journal { Key = 1, Label = "Szállító" } };
+        grid.Columns.Add(new DataGridComboBoxColumn
+        {
+            Header = "Journal", ItemsSource = journals, SelectedValuePath = "Key", DisplayMemberPath = "Label",
+            SelectedValueBinding = new Binding("Id")
+        });
+        // Items supplied elsewhere (for example by a style): the bound value is all the column knows.
+        grid.Columns.Add(new DataGridComboBoxColumn { Header = "Raw", SelectedValueBinding = new Binding("Id") });
+
+        var result = GridReader.Read(grid, new ReadGridRequest { ElementHandle = "h", Columns = new() { "Journal", "Raw" } }, new TreeWalker());
+
+        result.Rows.Select(r => r.Cells[0]).Should().Equal("Vevő", "Szállító", "2");
+        result.Rows.Select(r => r.Cells[1]).Should().Equal("0", "1", "2");
+    });
+
+    public sealed class Journal
+    {
+        public int Key { get; set; }
+        public string Label { get; set; } = "";
+    }
+
+    [Fact]
     public void Exact_type_filter_matches_the_type_and_subclasses_but_not_name_substrings()
     {
         TreeWalker.IsOrDerivesFrom(typeof(DataGrid), "DataGrid").Should().BeTrue();

@@ -85,7 +85,10 @@ internal static class GridReader
     private static string? CellValue(DataGrid grid, ReadColumn column, TextBlock probe, object item, int viewIndex,
         ref Dictionary<DataGridColumn, DataGridCell>? realized, ref bool unrealized)
     {
-        if (column.Binding != null) return Evaluate(probe, item, column.Binding);
+        if (column.Binding != null)
+            return column.Column is DataGridComboBoxColumn combo
+                ? ComboText(probe, item, combo, column.Binding)
+                : Evaluate(probe, item, column.Binding);
         if (column.Source == "sortMemberPath") return ReadMember(item, column.Column.SortMemberPath);
         realized ??= RealizedCells(grid, viewIndex);
         if (realized.TryGetValue(column.Column, out var cell)) return ControlOperations.CellText(cell);
@@ -229,6 +232,42 @@ internal static class GridReader
         BindingOperations.SetBinding(probe, TextBlock.TextProperty, binding);
         try { return probe.Text; }
         finally { BindingOperations.ClearBinding(probe, TextBlock.TextProperty); }
+    }
+
+    /// <summary>
+    /// The text a combo cell shows: the selected item (looked up by SelectedValuePath in the
+    /// column's ItemsSource when the cell binds a key) through DisplayMemberPath. Falls back to
+    /// the bound value when the items are supplied by a style and cannot be read from the column.
+    /// </summary>
+    private static string? ComboText(TextBlock probe, object item, DataGridComboBoxColumn combo, BindingBase binding)
+    {
+        probe.DataContext = item;
+        BindingOperations.SetBinding(probe, FrameworkElement.TagProperty, binding);
+        object? value;
+        try { value = probe.Tag; }
+        finally { BindingOperations.ClearBinding(probe, FrameworkElement.TagProperty); }
+        if (value == null) return string.Empty;
+
+        var selected = value;
+        if (ReferenceEquals(binding, combo.SelectedValueBinding))
+        {
+            selected = null;
+            if (combo.ItemsSource != null)
+                foreach (var candidate in combo.ItemsSource)
+                {
+                    var key = string.IsNullOrEmpty(combo.SelectedValuePath) ? candidate : ReadOrNull(candidate, combo.SelectedValuePath);
+                    if (Equals(key, value)) { selected = candidate; break; }
+                }
+            if (selected == null) return ControlOperations.Format(value);
+        }
+        return ControlOperations.Format(string.IsNullOrEmpty(combo.DisplayMemberPath) || ReferenceEquals(binding, combo.TextBinding)
+            ? selected : ReadOrNull(selected, combo.DisplayMemberPath));
+    }
+
+    private static object? ReadOrNull(object? item, string path)
+    {
+        try { return ControlOperations.ReadPath(item, path); }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException) { return null; }
     }
 
     private static string? ReadMember(object item, string path)

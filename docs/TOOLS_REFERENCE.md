@@ -139,6 +139,8 @@ rows are included. Read-only: selection, scroll position and data are unchanged.
 | `offset` | First data row to return (default 0) |
 | `limit` | Rows to return, 1-500 (default 50) |
 | `columns` | Optional exact headers or binding paths; default is every visible column in display order |
+| `min_rows`, `contains_text` | Optional wait conditions: at least that many rows, and/or a cell of the returned page containing the text (case-insensitive) |
+| `timeout_ms` | How long to wait for those conditions (default 5000, max 25000). A grid that does not exist yet counts as not ready; the call fails on timeout |
 
 The result contains `gridHandle`, `rowCount`, `offset`, `returned`, `hasMore`,
 `columns` (`index`, `header`, `bindingPath`, `converter`, `sortMemberPath`, `valueSource`), `rows` (`index` plus
@@ -158,7 +160,9 @@ from its `converter`); multi-binding child paths are joined with `+`. Find grids
 clipboard binding), `sortMemberPath` (template column read through its sort member)
 or `visual` (template column without any data binding: only rows currently on screen
 have text, others are `null` and a `note` says so). `DataGridComboBoxColumn` returns
-its bound value, which can be a key rather than the displayed text. Cells longer than
+the displayed text when the column itself defines `ItemsSource` (a bound key is looked
+up through `SelectedValuePath` / `DisplayMemberPath`); when the items come from a style
+it returns the bound value, which can be a key. Cells longer than
 2000 characters are truncated. Vendor grids are not supported.
 
 ```powershell
@@ -548,6 +552,8 @@ AutomationId requests fail explicitly until it supports the filter.
 | `type_name` | string | No | Element type, partial match (e.g., "Button", "TextBox"). Prefix with `=` to match only that type and types derived from it: `=DataGrid` finds grids and DataGrid subclasses, not `DataGridCell` or `DataGridColumnHeader` |
 | `element_name` | string | No | x:Name of the element |
 | `automation_id` | string | No | Exact AutomationProperties.AutomationId, or x:Name for elements without one (case-sensitive, 1–2048 characters, nonblank) |
+| `on_screen` | boolean | No | Only elements inside every scroll viewport, clipping container and their window. Stricter than `visible_only`, which keeps items scrolled out of view |
+| `has_text` | boolean | No | Only elements that have text |
 | `full_path` | boolean | No | Return each result's complete root-to-element `path`. By default only the nearest ancestors are kept (`… > Parent > Element`) to keep responses small |
 | `root_handle` | string | No | Restrict search to this window or subtree |
 | `property_filter` | object | No | Property name/value pairs to filter by |
