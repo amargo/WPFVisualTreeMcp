@@ -143,7 +143,7 @@ rows are included. Read-only: selection, scroll position and data are unchanged.
 | `timeout_ms` | How long to wait for those conditions (default 5000, max 25000). A grid that does not exist yet counts as not ready; the call fails on timeout |
 
 The result contains `gridHandle`, `rowCount`, `offset`, `returned`, `hasMore`,
-`columns` (`index`, `header`, `bindingPath`, `converter`, `sortMemberPath`, `valueSource`), `rows` (`index` plus
+`columns` (`index`, `header`, `headerToolTip`, `bindingPath`, `converter`, `sortMemberPath`, `valueSource`), `rows` (`index` plus
 `cells` in column order), `selectedIndices` and `currentRowIndex`. Row indices follow
 the current sorted/filtered items view and match `wpf_select_item` indices; the
 new-item placeholder row is excluded. `wpf_select_item` on a DataGrid matches
@@ -151,6 +151,9 @@ new-item placeholder row is excluded. `wpf_select_item` on a DataGrid matches
 first matching row), so a row found here can be selected by text or by `index`.
 The selected row is scrolled into view, becomes the current row and receives keyboard
 focus, so `wpf_send_keys` to the grid (for example `Enter`) then acts on that row.
+Selecting is not activating: an application that loads details or opens a record only
+on Enter or double-click has not done so after `wpf_select_item`; send the key or
+double-click afterwards.
 
 `bindingPath` is `.` when a column binds to the whole data item (the text then comes
 from its `converter`); multi-binding child paths are joined with `+`. Find grids with
@@ -170,8 +173,40 @@ wpfinspect read-grid --pid 1234 --automation-id Orders --offset 100 --limit 50
 wpfinspect read-grid --pid 1234 --handle elem_42 --columns "Id,Quantity"
 ```
 
+Each column reports `header` (the caption) and, for element headers with a tooltip,
+`headerToolTip`. `columns` entries are exact headers, binding paths or `#index`
+(the column's `index`, for grids whose headers repeat). A wrong name fails immediately, also when waiting with
+`min_rows` / `contains_text`.
+
+A `ListView` whose view is a `GridView` is read the same way: `DisplayMemberBinding`
+columns from the data items, `CellTemplate` columns (`valueSource: visual`) from rows on
+screen.
+
 Requires the updated Inspector: restart an application that already has an older
 Inspector loaded.
+
+### wpf_edit_grid_cell
+
+Edits the text of one `DataGrid` cell through the grid's own edit cycle: begin edit, set
+the editor text, commit cell and row. Validation and data binding run as for a user
+edit. **Changes application data.**
+
+| Parameter | Description |
+|-----------|-------------|
+| `element_handle` / `automation_id` (+ `root_handle`) | The DataGrid, an element inside it, or a container holding exactly one |
+| `row_index` | Row index as returned by `wpf_read_grid` |
+| `column` | Exact header, binding path or `#index` (position in `Columns`, for repeated headers) |
+| `text` | New cell text |
+
+Returns `changed`, `value` (cell text after the edit), `previous`, `rowIndex`,
+`columnIndex` and `cellHandle`. Only text columns and template columns exposing exactly
+one `TextBox` editor are supported; read-only grids/columns and values rejected by
+validation fail, and the cell is not left in edit mode. A row that is not realized yet
+reports "not ready" without changing anything; retry.
+
+```powershell
+wpfinspect edit-cell --pid 1234 --automation-id Orders --row 3 --column Quantity --text 12
+```
 
 ## Mouse Interaction
 

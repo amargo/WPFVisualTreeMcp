@@ -162,11 +162,24 @@ internal sealed class ControlOperations
         if (cell == null) throw new ControlNotReadyException("Virtualized grid cell has not been realized yet.");
         if (!cell.IsVisible || !cell.IsEnabled) throw new ControlNotReadyException("Grid cell is not visible and enabled.");
         // All retryable preparation ends here. Editing below is performed at most once.
-        var before = CellText(cell);
-        if (request.Operation == "grid_edit")
+        // An edit is judged on the data item: the application may refresh or replace the cell
+        // visual on commit, and the old container then shows nothing.
+        var editing = request.Operation == "grid_edit";
+        var before = editing ? GridReader.ItemCellText(grid, column, item, cell) : CellText(cell);
+        if (editing)
         {
             grid.CurrentCell = new DataGridCellInfo(item, column);
-            if (!grid.BeginEdit()) throw new InvalidOperationException("WPF rejected BeginEdit (read-only state, validation or an application handler).");
+            // Registered last, so it sees what the application's own BeginningEdit handlers decided.
+            var cancelledByApplication = false;
+            EventHandler<DataGridBeginningEditEventArgs> observe = (_, e) => cancelledByApplication = e.Cancel;
+            grid.BeginningEdit += observe;
+            bool began;
+            try { began = grid.BeginEdit(); }
+            finally { grid.BeginningEdit -= observe; }
+            if (!began)
+                throw new InvalidOperationException(cancelledByApplication
+                    ? "The application cancelled the edit in its BeginningEdit handler: this row or cell is not editable in its current state (the application may require an action first, such as starting a modification). Nothing was changed."
+                    : "WPF rejected BeginEdit (read-only state, validation or an application handler). Nothing was changed.");
             cell.UpdateLayout();
             var editors = Descendants(cell).OfType<TextBox>().Where(x => x.IsVisible).ToArray();
             if (editors.Length != 1)
@@ -183,11 +196,12 @@ internal sealed class ControlOperations
                 throw new InvalidOperationException("WPF rejected the cell edit: " + string.Join("; ", Validation.GetErrors(editor).Select(x => x.ErrorContent)));
             grid.UpdateLayout();
         }
+        var after = editing ? GridReader.ItemCellText(grid, column, item, cell) : CellText(cell);
         return new ControlResult
         {
             RowIndex = rowIndex, ColumnIndex = grid.Columns.IndexOf(column),
-            ElementHandle = _walker.GetOrCreateHandle(cell), Value = CellText(cell),
-            Changed = request.Operation == "grid_edit" && before != CellText(cell)
+            ElementHandle = _walker.GetOrCreateHandle(cell), Value = after,
+            Changed = editing && before != after
         };
     }
 
@@ -306,7 +320,7 @@ internal sealed class ControlOperations
             return grid.Columns[index];
         }
         var matches = grid.Columns.Where(c => locator.Header != null
-            ? string.Equals(Display(c.Header), locator.Header, StringComparison.Ordinal)
+            ? GridReader.HeaderMatches(c.Header, locator.Header)
             : c is DataGridBoundColumn { Binding: Binding b } && b.Path?.Path == locator.BindingPath).ToArray();
         if (matches.Length != 1) throw new ArgumentException($"Column locator matches {matches.Length} columns; exactly one is required.");
         return matches[0];

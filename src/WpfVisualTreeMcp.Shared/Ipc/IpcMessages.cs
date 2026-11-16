@@ -26,7 +26,7 @@ public abstract class IpcResponse
 /// </summary>
 public static class InspectorFeatures
 {
-    public const int Level = 5;
+    public const int Level = 8;
 
     /// <summary>Guidance when the loaded Inspector and this server were built at different levels; null when they match.</summary>
     public static string? CompatibilityNote(int inspectorLevel, int serverLevel = Level)
@@ -39,6 +39,12 @@ public static class InspectorFeatures
 }
 
 /// <summary>Reserved property_filter keys evaluated by the Inspector instead of read as CLR properties.</summary>
+public static class IpcErrors
+{
+    /// <summary>Returned by the Inspector when a request was cancelled because the application is shutting down.</summary>
+    public const string ApplicationClosing = "The application is closing and cancelled the request; if this request closed it, that is the expected result. Handles from that process are no longer valid.";
+}
+
 public static class FindFilters
 {
     public const string OnScreen = "@onScreen";

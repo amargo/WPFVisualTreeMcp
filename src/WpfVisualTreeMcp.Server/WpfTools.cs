@@ -102,14 +102,78 @@ public class WpfTools
     }
 
     [McpServerTool]
-    [Description("Get the visual tree hierarchy. Use root_handle to start from a specific element (from wpf_find_elements). Use max_depth to control depth (1-100, default 25). For deep UIs like AvalonDock, increase max_depth or use root_handle to zoom into a subtree.")]
-    public async Task<object> WpfGetVisualTree(string? root_handle = null, int max_depth = 25)
+    [Description("Get the visual tree hierarchy. Use root_handle to start from a specific element (from wpf_find_elements). Use max_depth to control depth (1-100, default 25). For deep UIs like AvalonDock, increase max_depth or use root_handle to zoom into a subtree. outline=true returns an indented text outline (one line per element: short type, [name], handle) that is less than half the size of the JSON tree; prefer it for browsing. To locate specific controls use wpf_find_elements instead of dumping the tree.")]
+    public async Task<object> WpfGetVisualTree(string? root_handle = null, int max_depth = 25, bool outline = false)
     {
         if (max_depth < 1) max_depth = 1;
         if (max_depth > 100) max_depth = 100;
 
         var result = await _ipcBridge.GetVisualTreeAsync(root_handle, max_depth);
-        return result;
+        return outline ? TreeOutline(result) : result;
+    }
+
+    /// <summary>
+    /// The tree as indented text: one line per element with its short type name, x:Name and handle.
+    /// Carries the same navigation information as the JSON tree at a fraction of its size.
+    /// </summary>
+    internal static string TreeOutline(VisualTreeResult tree)
+    {
+        var text = new System.Text.StringBuilder();
+        void Append(VisualTreeNode node, int depth)
+        {
+            var type = node.TypeName;
+            var generic = type.IndexOf('`');
+            var dot = type.LastIndexOf('.', generic < 0 ? type.Length - 1 : generic);
+            text.Append(' ', depth).Append(dot < 0 ? type : type.Substring(dot + 1));
+            if (!string.IsNullOrEmpty(node.Name)) text.Append(" [").Append(node.Name).Append(']');
+            text.Append(' ').Append(node.Handle);
+            if (node.NativeContent != null) text.Append(" (native content: ").Append(node.NativeContent.Kind).Append(')');
+            text.Append('\n');
+            foreach (var child in node.Children) Append(child, depth + 1);
+        }
+        Append(tree.Root, 0);
+        text.Append("totalElements: ").Append(tree.TotalElements);
+        if (tree.MaxDepthReached) text.Append("; max_depth reached, deeper elements omitted");
+        return text.ToString();
+    }
+
+    [McpServerTool]
+    [Description("Edit the text of one DataGrid cell: begins the cell edit, sets the editor text, and commits the cell and row, so the application's validation and data binding run as for a user edit. row_index is the wpf_read_grid row index; column is an exact header, binding path or '#index' (position in Columns, for repeated headers). Text columns and template columns with a single TextBox editor only; read-only grids/columns and rejected (invalid) values fail without leaving the cell in edit mode. Returns the cell text after the edit and whether it changed. STATE-CHANGING: this writes application data." + InputTargetDescription)]
+    public async Task<object> WpfEditGridCell(int row_index, string column, string text,
+        string? element_handle = null, string? automation_id = null, string? root_handle = null)
+    {
+        if (row_index < 0 || string.IsNullOrWhiteSpace(column) || text == null)
+            throw new McpException("row_index must be >= 0, and column and text are required.");
+        var handle = await _ipcBridge.ResolveElementHandleAsync(element_handle, automation_id, root_handle);
+        return await EditGridCellAsync(_ipcBridge, handle, row_index, column, text, message => new McpException(message));
+    }
+
+    internal static async Task<object> EditGridCellAsync(IIpcBridge bridge, string gridHandle, int rowIndex, string column, string text, Func<string, Exception> error)
+    {
+        // The grid may be given as a container or inner element, and the column by header or binding path.
+        var grid = await bridge.ReadGridAsync(gridHandle, rowIndex, 1, new[] { column });
+        if (grid.Returned == 0) throw error($"Row {rowIndex} does not exist; the grid has {grid.RowCount} row(s).");
+        var response = await bridge.ControlOperationAsync(new WpfVisualTreeMcp.Shared.Ipc.ControlOperationRequest
+        {
+            ElementHandle = grid.GridHandle, Operation = "grid_edit", Value = text,
+            Row = ItemLocator.At(rowIndex), Column = ColumnLocator.At(grid.Columns[0].Index)
+        });
+        if (response.NotReady)
+            throw error("The cell is not ready to edit yet (" + (response.Reason ?? "row or cell not realized") + "). Nothing was changed; retry.");
+        var changed = response.Result.Changed;
+        var value = response.Result.Value;
+        var previous = grid.Rows[0].Cells[0];
+        if (!changed)
+        {
+            // The application may apply the value after the commit returns (deferred recalculation).
+            var now = await bridge.ReadGridAsync(grid.GridHandle, rowIndex, 1, new[] { "#" + grid.Columns[0].Index });
+            if (now.Returned == 1 && now.Rows[0].Cells[0] != previous) { changed = true; value = now.Rows[0].Cells[0]; }
+        }
+        return new
+        {
+            changed, value, previous,
+            rowIndex, columnIndex = response.Result.ColumnIndex, cellHandle = response.Result.ElementHandle
+        };
     }
 
     [McpServerTool]
@@ -279,7 +343,7 @@ public class WpfTools
     }
 
     [McpServerTool]
-    [Description("Read DataGrid rows as text without screenshots or scrolling: values are evaluated from the data items through the column bindings (converters and StringFormat applied), so virtualized/off-screen rows are included. Returns rowCount, columns (index, header, bindingPath, valueSource) and rows as {index, cells[]} with cells in column order, plus selectedIndices, currentRowIndex and hasMore. Page with offset/limit (limit 1-500, default 50); row indices follow the current sorted/filtered view and match wpf_select_item index. columns optionally restricts output to exact headers or binding paths (fewer tokens); default is every visible column in display order. The target may be the DataGrid, any element inside it, or a container holding exactly one DataGrid. Template columns without a data binding (valueSource='visual') only have text for rows currently on screen; DataGridComboBoxColumn returns the display text when the column defines its ItemsSource, otherwise the bound value, which can be a key. Standard WPF DataGrid only. Read-only. To wait for data instead of polling, pass min_rows and/or contains_text (a cell of the returned page containing that text): the call retries up to timeout_ms (default 5000, max 25000) until the grid exists and satisfies them, then returns the rows with waitedMs; it fails on timeout, so a returned result means the condition held." + InputTargetDescription)]
+    [Description("Read DataGrid rows as text without screenshots or scrolling: values are evaluated from the data items through the column bindings (converters and StringFormat applied), so virtualized/off-screen rows are included. Returns rowCount, columns (index, header, headerToolTip, bindingPath, valueSource) and rows as {index, cells[]} with cells in column order, plus selectedIndices, currentRowIndex and hasMore. Page with offset/limit (limit 1-500, default 50); row indices follow the current sorted/filtered view and match wpf_select_item index. columns optionally restricts output to exact headers, binding paths or '#index' names (fewer tokens); default is every visible column in display order. The target may be the DataGrid, any element inside it, or a container holding exactly one DataGrid. Template columns without a data binding (valueSource='visual') only have text for rows currently on screen; DataGridComboBoxColumn returns the display text when the column defines its ItemsSource, otherwise the bound value, which can be a key. Standard WPF DataGrid only. Read-only. To wait for data instead of polling, pass min_rows and/or contains_text (a cell of the returned page containing that text): the call retries up to timeout_ms (default 5000, max 25000) until the grid exists and satisfies them, then returns the rows with waitedMs; it fails on timeout, so a returned result means the condition held." + InputTargetDescription)]
     public async Task<GridReadResult> WpfReadGrid(string? element_handle = null, string? automation_id = null, string? root_handle = null,
         int offset = 0, int limit = 50, string[]? columns = null,
         int min_rows = 0, string? contains_text = null, int timeout_ms = DefaultGridWaitMs)
@@ -322,7 +386,12 @@ public class WpfTools
             GridReadResult? grid = null;
             string? failure = null;
             try { grid = await read(); }
-            catch (Exception ex) when (ex is not OperationCanceledException) { failure = ex.Message; }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // A wrong column name on a grid that has columns will not fix itself by waiting.
+                if (ex.Message.Contains("exactly one is required. Available: '", StringComparison.Ordinal)) throw;
+                failure = ex.Message;
+            }
             if (grid != null && Ready(grid)) { grid.WaitedMs = (int)clock.ElapsedMilliseconds; return grid; }
             if (clock.ElapsedMilliseconds >= timeoutMs)
             {
@@ -662,7 +731,7 @@ public class WpfTools
     }
 
     [McpServerTool]
-    [Description("Select an item in a ComboBox, ListBox, ListView, DataGrid or TabControl by visible text (item_text, case-insensitive substring) or zero-based index. For a DataGrid, item_text matches any visible cell of a row (the texts wpf_read_grid returns; first matching row wins) and index is the wpf_read_grid row index. A selected DataGrid row is scrolled into view, made the current row and given keyboard focus, so a following wpf_send_keys to the grid (e.g. Enter) acts on that row. Selection is set without mouse or keyboard input; verify the application reacted and use a physical click if it only handles user input. PREFER this over clicking for dropdowns/lists: it works even when items are virtualized (not yet in the visual tree) and raises proper selection events. On failure the error lists the available items. STATE-CHANGING." + InputTargetDescription)]
+    [Description("Select an item in a ComboBox, ListBox, ListView, DataGrid or TabControl by visible text (item_text, case-insensitive substring) or zero-based index. For a DataGrid, item_text matches any visible cell of a row (the texts wpf_read_grid returns; first matching row wins) and index is the wpf_read_grid row index. A selected DataGrid row is scrolled into view, made the current row and given keyboard focus, so a following wpf_send_keys to the grid (e.g. Enter) acts on that row. Selecting is not activating: selection is set without mouse or keyboard input, so an application that loads details or opens a record only on Enter or double-click has not done so yet; follow with wpf_send_keys Enter or a double click, and verify the application reacted. PREFER this over clicking for dropdowns/lists: it works even when items are virtualized (not yet in the visual tree) and raises proper selection events. On failure the error lists the available items. STATE-CHANGING." + InputTargetDescription)]
     public async Task<object> WpfSelectItem(string? element_handle = null, string? item_text = null, int? index = null,
         string? automation_id = null, string? root_handle = null)
     {

@@ -40,7 +40,7 @@ python scripts/test_automation_package.py --packages artifacts/packages
 AI Agent (Claude Code)
     ↓ [MCP Protocol - JSON-RPC over stdio]
 MCP Server (.NET 8.0)
-    ├─ WpfTools (39 tools)
+    ├─ WpfTools (40 tools)
     ├─ ProcessManager (discovers WPF processes)
     └─ NamedPipeBridge (IPC)
         ↓ [Named Pipes: wpf_inspector_{pid}]
@@ -54,15 +54,15 @@ Target WPF Application (.NET Framework)
         └─ IpcServer (named pipe communication)
 ```
 
-**Key Design:** The server runs separately and communicates via named pipes. `wpf_click_element`, `wpf_move_mouse`, `wpf_scroll`, `wpf_drag`, `wpf_touch_gesture`, `wpf_select_item`, `wpf_set_text`, `wpf_send_keys`, `wpf_set_property`, and `wpf_revert_property` change application state. `wpf_replay` executes recorded actions; full-content screenshots can temporarily scroll controls and trigger handlers. Recording/snapshots/watches maintain Inspector state. `wpf_set_property` is reversible via `wpf_revert_property` (per-session undo stack that restores the prior binding, local value, or default).
+**Key Design:** The server runs separately and communicates via named pipes. `wpf_click_element`, `wpf_move_mouse`, `wpf_scroll`, `wpf_drag`, `wpf_touch_gesture`, `wpf_select_item`, `wpf_set_text`, `wpf_send_keys`, `wpf_edit_grid_cell`, `wpf_set_property`, and `wpf_revert_property` change application state. `wpf_replay` executes recorded actions; full-content screenshots can temporarily scroll controls and trigger handlers. Recording/snapshots/watches maintain Inspector state. `wpf_set_property` is reversible via `wpf_revert_property` (per-session undo stack that restores the prior binding, local value, or default).
 
 ## Key Source Locations
 
 | Component | Location | Purpose |
 |-----------|----------|---------|
 | MCP Server Entry | `src/WpfVisualTreeMcp.Server/Program.cs` | Server init with MCP SDK; routes to CLI mode if args present |
-| Tool Definitions | `src/WpfVisualTreeMcp.Server/WpfTools.cs` | 39 tools with `[McpServerTool]` attributes |
-| CLI Front-End | `src/WpfVisualTreeMcp.Server/Cli/CliRunner.cs` | 39 inspection/workflow commands plus CLI-only `update` |
+| Tool Definitions | `src/WpfVisualTreeMcp.Server/WpfTools.cs` | 40 tools with `[McpServerTool]` attributes |
+| CLI Front-End | `src/WpfVisualTreeMcp.Server/Cli/CliRunner.cs` | 40 inspection/workflow commands plus CLI-only `update` |
 | Workflow Recording | `WorkflowRecorder.cs`, `StableSelectors.cs`, `InspectorService.Workflow.cs` | Inspector-owned recording and gated replay; exact selectors, explicit waits/assertions |
 | Test Export | `src/WpfVisualTreeMcp.Server/WorkflowTestExporter.cs` | Data-only workflow JSON plus a standalone xUnit project using CLI replay |
 | Aggregate Diagnostics | `src/WpfVisualTreeMcp.Inspector/DiagnosticReporter.cs` | Bounded realized-tree scan, current binding/validation errors and separate process-wide trace history |
@@ -72,7 +72,7 @@ Target WPF Application (.NET Framework)
 | Property Writer | `src/WpfVisualTreeMcp.Inspector/PropertyWriter.cs` | Live-edits dependency properties (TypeConverter coercion) with a per-session undo stack (restores prior binding/local/default) |
 | Snapshot / Diff | `TreeWalker.CaptureSnapshot` + `InspectorService.ComputeDiff` | Capture a subtree's curated state keyed by element handle; diff two snapshots (handle stable → changed/added/removed) |
 | Injector Helper | `src/WpfVisualTreeMcp.InjectorHelper/Program.cs` | 32-bit .NET 8 helper exe spawned by `ProcessInjector` for cross-arch injection (v0.6.0) |
-| Grid Reader | `src/WpfVisualTreeMcp.Inspector/GridReader.cs` | `wpf_read_grid` / CLI `read-grid`: pages DataGrid rows as text from the data items via column bindings (no scrolling; virtualized rows included) |
+| Grid Reader | `src/WpfVisualTreeMcp.Inspector/GridReader.cs` | `wpf_read_grid` / CLI `read-grid`: pages DataGrid and ListView/GridView rows as text from the data items via column bindings (no scrolling; virtualized rows included); also row search for `wpf_select_item`. `wpf_edit_grid_cell` reuses `ControlOperations` `grid_edit` |
 | C# Test SDK | `src/WpfVisualTreeMcp.Automation/` | WpfApplication/WpfElement, async actions and exact property/predicate waits; standalone NuGet payload |
 | IPC Bridge | `src/WpfVisualTreeMcp.Automation/Infrastructure/InspectorBridge.cs` | Shared pipe transport; Server/Services/NamedPipeBridge adapts errors to MCP |
 | Process Manager | `src/WpfVisualTreeMcp.Automation/Infrastructure/ProcessManager.cs` | Shared WPF process discovery and attachment |
@@ -161,6 +161,8 @@ Target WPF Application (.NET Framework)
   Dispatcher until the process owns the foreground (never send otherwise: OS keys go to the
   foreground window of any application), confirm focus inside the target, send, then use
   `KeyDeliveryProbe` (InputManager.PreNotifyInput) to warn when WPF saw no key down.
+  `PhysicalInputGuard.BringToForeground` (AttachThreadInput + SetForegroundWindow) replaces a bare
+  `Window.Activate()` for all physical input; ownership is still verified before anything is sent.
   Do not pump the Dispatcher from inside an operation: a key that opens a modal dialog would
   block the reply.
 
@@ -254,7 +256,7 @@ The server uses the official Microsoft/Anthropic MCP SDK. Configure in `.mcp.jso
 The server executable doubles as a command-line tool. `WpfVisualTreeMcp.Server.exe`
 with **no arguments** runs the MCP stdio server; with **any recognised subcommand**
 it runs a single one-shot CLI command instead (`Program.cs` checks `args[0]` via
-`CliRunner.IsCliCommand`). This gives the same 39 capabilities without an MCP
+`CliRunner.IsCliCommand`). This gives the same 40 capabilities without an MCP
 connection — useful when the MCP server is not connected, for scripting, or for
 verifying the pipeline manually.
 

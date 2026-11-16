@@ -267,7 +267,10 @@ public partial class InspectorService : IDisposable
         catch (Exception ex)
         {
             DebugLog($"ERROR in HandleRequestAsync: {ex.Message}\n{ex.StackTrace}");
-            return new GetVisualTreeResponse { Success = false, Error = ex.Message };
+            // A request that closes the application is cancelled by the shutdown it caused.
+            var closing = ex is OperationCanceledException
+                && (_inputShutdown.IsCancellationRequested || Application.Current?.Dispatcher.HasShutdownStarted != false);
+            return new GetVisualTreeResponse { Success = false, Error = closing ? IpcErrors.ApplicationClosing : ex.Message };
         }
         finally
         {

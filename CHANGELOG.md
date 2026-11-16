@@ -25,6 +25,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `wpf_find_elements` filters `on_screen` (inside the scroll viewport and window) and
   `has_text`.
 - `scripts/Deploy-Local.ps1` rebuilds the Release server while it is in use.
+- `wpf_edit_grid_cell` / CLI `edit-cell`: edit one DataGrid cell through the grid's own
+  edit/commit cycle (validation and binding run as for a user edit).
+- `wpf_read_grid` also reads a `ListView` with a `GridView`.
+- `wpf_read_grid` reports a header element's tooltip as `headerToolTip` instead of appending
+  it to `header`, reads template cells whose text is nested deeply, and fails at once on a
+  wrong column name instead of waiting out `timeout_ms`.
+- Physical `wpf_set_text` / `wpf_send_keys` on a wrapper that cannot take focus type into
+  the editor inside it.
+- A request cancelled because it closed the application reports that instead of
+  "A task was canceled."
+- `wpf_edit_grid_cell` reports `changed` / `value` from the data item, and re-reads the grid
+  when the application applies the value after the commit.
+- Grid columns can be named as `#index` when headers repeat; the ambiguity error lists the
+  candidates.
+- Physical input brings the application to the foreground when Windows refuses a plain
+  activation (input is still sent only after foreground ownership is verified).
+- `wpf_get_visual_tree` `outline=true` / CLI `tree --outline`: indented text outline,
+  less than half the size of the JSON tree.
 
 ### Changed
 
@@ -33,6 +51,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the result warns when WPF never received the key (global hotkey, other window).
 - `wpf_read_grid` returns the displayed text of combo columns that define their own
   `ItemsSource` instead of the bound key.
+- `wpf_select_item` on a DataGrid with `SelectionUnit=Cell` selects and focuses a cell
+  of the row instead of failing with a WPF exception.
+- `wpf_edit_grid_cell` says when the application's `BeginningEdit` handler cancelled
+  the edit; an application that exits during a request is reported as such even when
+  the pipe read is cancelled.
 - `wpf_get_binding_errors` merges identical errors with `occurrences` / `firstSeen`.
 - `wpf_select_item` on a DataGrid scrolls the row into view, makes it the current row
   and moves keyboard focus into it; keys sent to a grid go to its current cell, so

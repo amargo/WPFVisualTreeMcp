@@ -697,7 +697,7 @@ public class TreeWalker
     /// plus AutomationProperties.Name, ToolTip and Window.Title.
     /// Internal so ControlInteractor can describe item containers the same way.
     /// </summary>
-    internal static string? GetSearchableText(DependencyObject element)
+    internal static string? GetSearchableText(DependencyObject element, bool includeToolTip = true)
     {
         var parts = new List<string>();
 
@@ -720,12 +720,34 @@ public class TreeWalker
         }
         catch { /* attached property not readable on all elements */ }
 
-        if (element is FrameworkElement fe && fe.ToolTip is string tooltip && !string.IsNullOrWhiteSpace(tooltip))
+        if (includeToolTip && element is FrameworkElement fe && fe.ToolTip is string tooltip && !string.IsNullOrWhiteSpace(tooltip))
         {
             parts.Add(tooltip);
         }
 
         return parts.Count == 0 ? null : string.Join(" ", parts.Distinct());
+    }
+
+    /// <summary>
+    /// Every text shown below an element, at any depth, in visual order. For cell templates
+    /// whose text sits deeper than the shallow scan of <see cref="GetSearchableText"/> reaches.
+    /// </summary>
+    internal static string? GetDeepText(DependencyObject element)
+    {
+        var parts = new List<string>();
+        void Collect(DependencyObject parent)
+        {
+            foreach (var child in GetAllVisualChildren(parent))
+            {
+                if (parts.Count >= 20) return;
+                if (child is UIElement { Visibility: not Visibility.Visible }) continue;
+                var text = GetOwnText(child);
+                if (!string.IsNullOrWhiteSpace(text)) parts.Add(text!.Trim());
+                else Collect(child);
+            }
+        }
+        Collect(element);
+        return parts.Count == 0 ? null : string.Join(" ", parts);
     }
 
     private static string? GetHeaderText(DependencyObject element)

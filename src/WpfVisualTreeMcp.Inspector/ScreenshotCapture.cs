@@ -851,7 +851,7 @@ public class ScreenshotCapture
         var window = Window.GetWindow(element);
         if (window?.WindowState == WindowState.Minimized)
             throw new InvalidOperationException("Screen capture cannot capture a minimized window. Restore the target window first.");
-        window?.Activate();
+        ControlInteractor.BringToForeground(window);
         new PhysicalInputGuard().VerifyForeground();
         // Activation and the compositor update are asynchronous. Wait for the
         // pending frame instead of returning pixels of the previous foreground app.

@@ -29,13 +29,13 @@ public static class CliRunner
         "styles", "watch-property", "highlight", "click", "move-mouse", "scroll", "drag", "touch", "select-item", "set-text",
         "send-keys", "wait-for", "set-property", "revert-property", "snapshot", "diff",
         "evaluate-binding", "explain-triggers", "layout", "export", "screenshot", "read-grid",
-        "record", "get-recording", "assert", "replay", "export-test",
+        "record", "get-recording", "assert", "replay", "export-test", "edit-cell",
     };
 
     /// <summary>Options that never take a value (presence alone is meaningful).</summary>
     private static readonly HashSet<string> KnownFlags = new(StringComparer.OrdinalIgnoreCase)
     {
-        "auto-inject", "compact", "short-path", "on-screen", "has-text", "verbose", "physical", "horizontal", "visible-only", "full-content", "all", "help", "h", "check", "status",
+        "auto-inject", "compact", "outline", "short-path", "on-screen", "has-text", "verbose", "physical", "horizontal", "visible-only", "full-content", "all", "help", "h", "check", "status",
     };
 
     private static string Exe =>
@@ -201,7 +201,9 @@ public static class CliRunner
                 {
                     await AttachAsync(processManager, cli, false);
                     var depth = Math.Clamp(cli.GetInt("depth", 25), 1, 100);
-                    WriteJson(await bridge.GetVisualTreeAsync(cli.GetStringOrNull("root"), depth), cli);
+                    var tree = await bridge.GetVisualTreeAsync(cli.GetStringOrNull("root"), depth);
+                    if (cli.Flags.Contains("outline")) Console.Out.WriteLine(WpfTools.TreeOutline(tree));
+                    else WriteJson(tree, cli);
                     break;
                 }
 
@@ -602,6 +604,21 @@ public static class CliRunner
                     break;
                 }
 
+                case "edit-cell":
+                {
+                    await AttachAsync(processManager, cli, false);
+                    var cellRow = cli.GetInt("row", -1);
+                    var cellColumn = cli.GetStringOrNull("column");
+                    var cellText = cli.GetStringOrNull("text");
+                    if (cellRow < 0 || string.IsNullOrWhiteSpace(cellColumn) || cellText == null)
+                        throw new ArgumentException("edit-cell requires --row N (>= 0), --column and --text.");
+                    var cellGrid = await bridge.ResolveElementHandleAsync(cli.GetStringOrNull("handle"),
+                        cli.GetStringOrNull("automation-id"), cli.GetStringOrNull("root"));
+                    WriteJson(await WpfTools.EditGridCellAsync(bridge, cellGrid, cellRow, cellColumn!, cellText,
+                        message => new ArgumentException(message)), cli);
+                    break;
+                }
+
                 case "screenshot":
                 {
                     await AttachAsync(processManager, cli, false);
@@ -718,7 +735,7 @@ COMMANDS
   update        [--check | --status]  update this installation (no PID required)
   list                              list inspectable WPF processes
   attach        --pid|--process [--auto-inject]
-  tree          --pid [--root H] [--depth N]
+  tree          --pid [--root H] [--depth N] [--outline]
   report        --pid [--root H] [--max N] [--depth N] [--max-findings N]
   record        start|stop|status|clear --pid [--name N]
   get-recording --pid [--out workflow.json]
@@ -755,6 +772,7 @@ COMMANDS
   export        --pid [--handle H] [--format json|xaml] [--out FILE]
   screenshot    --pid [--handle H] [--out FILE] [--max-width N] [--max-height N] [--mode auto|render|screen] [--full-content]
   read-grid     --pid (--handle H | --automation-id ID [--root H]) [--offset N] [--limit N] [--columns 'A,B']   (DataGrid rows as text)
+  edit-cell     --pid (--handle H | --automation-id ID [--root H]) --row N --column C --text S   (changes app data)
 
 Element handles (elem_XXXXXXXX) come from 'tree' / 'find' and stay valid while
 the target app keeps running.
@@ -784,8 +802,16 @@ TYPICAL WORKFLOW
             "attach" => "attach --pid <id> | --process <name> [--auto-inject]\n"
                       + "  Create a session. --auto-inject loads the Inspector DLL into a process\n"
                       + "  that does not already host it (one-time; survives for later commands).",
-            "tree" => "tree --pid <id> [--root <handle>] [--depth <1-100>]\n"
-                    + "  Dump the visual tree. --root zooms into a subtree; --depth defaults to 25.",
+            "tree" => "tree --pid <id> [--root <handle>] [--depth <1-100>] [--outline]\n"
+                    + "  Dump the visual tree. --root zooms into a subtree; --depth defaults to 25.\n"
+                    + "  --outline prints indented text (type, [name], handle per line) instead of\n"
+                    + "  JSON; it is less than half the size.",
+            "edit-cell" => "edit-cell --pid <id> (--handle H | --automation-id ID [--root H]) --row <n> --column <header or binding path> --text <text>\n"
+                         + "  Edit one DataGrid cell: begins the edit, sets the text and commits cell and\n"
+                         + "  row, so validation and binding run as for a user edit. --row is the read-grid\n"
+                         + "  row index. Text columns and template columns with one TextBox editor only;\n"
+                         + "  read-only cells and rejected values fail. Prints the previous and new text.\n"
+                         + "  This command CHANGES application data.",
             "report" => "report --pid <id> [--root H] [--max 1-2000] [--depth 1-100] [--max-findings 1-500]\n"
                       + "  Aggregate current binding/validation errors and UI state counts.\n"
                       + "  Defaults: 500 elements, depth 25, 100 findings. Reports truncation.\n"

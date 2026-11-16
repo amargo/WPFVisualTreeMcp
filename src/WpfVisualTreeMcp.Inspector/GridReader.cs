@@ -25,7 +25,9 @@ internal static class GridReader
     internal static GridReadResult Read(DependencyObject target, ReadGridRequest request, TreeWalker walker)
     {
         request.Validate();
-        var grid = ResolveGrid(target);
+        var owner = ResolveGrid(target);
+        if (owner is ListView list) return ReadList(list, (GridView)list.View, request, walker);
+        var grid = (DataGrid)owner;
         var columns = ResolveColumns(grid, request.Columns);
 
         // The new-item placeholder sits at either end of the view and is not a data row.
@@ -48,7 +50,7 @@ internal static class GridReader
             Offset = request.Offset,
             Columns = columns.Select(c => new GridReadColumn
             {
-                Index = c.Index, Header = ControlOperations.Display(c.Column.Header),
+                Index = c.Index, Header = HeaderText(c.Column.Header), HeaderToolTip = HeaderToolTip(c.Column.Header),
                 BindingPath = BindingPath(c.Column), Converter = Converter(c.Column), ValueSource = c.Source,
                 SortMemberPath = c.Source == "sortMemberPath" ? c.Column.SortMemberPath : null
             }).ToList(),
@@ -91,10 +93,50 @@ internal static class GridReader
                 : Evaluate(probe, item, column.Binding);
         if (column.Source == "sortMemberPath") return ReadMember(item, column.Column.SortMemberPath);
         realized ??= RealizedCells(grid, viewIndex);
-        if (realized.TryGetValue(column.Column, out var cell)) return ControlOperations.CellText(cell);
+        // A realized cell always has a text (possibly empty); null is reserved for rows that are not on screen.
+        if (realized.TryGetValue(column.Column, out var cell))
+            return ControlOperations.CellText(cell) ?? TreeWalker.GetDeepText(cell) ?? string.Empty;
         unrealized = true;
         return null;
     }
+
+    /// <summary>
+    /// The text one cell shows for a data item, as <see cref="Read"/> returns it: evaluated on the
+    /// item when the column has a data binding, otherwise read from the cell visual.
+    /// </summary>
+    internal static string? ItemCellText(DataGrid grid, DataGridColumn column, object item, DataGridCell cell)
+    {
+        var binding = DataBinding(column);
+        if (binding == null) return ControlOperations.CellText(cell) ?? TreeWalker.GetDeepText(cell);
+        var probe = new TextBlock { Language = grid.Language };
+        try { return column is DataGridComboBoxColumn combo ? ComboText(probe, item, combo, binding) : Evaluate(probe, item, binding); }
+        finally { probe.DataContext = null; }
+    }
+
+    /// <summary>A column named as '#index' (its position in Columns), for grids whose headers repeat.</summary>
+    private static int? IndexName(string name, int count) =>
+        name.Length > 1 && name[0] == '#' && int.TryParse(name.Substring(1), System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var index) && index < count
+            ? index : null;
+
+    private static string ColumnError(string name, List<(int Index, string? Header, string? Path)> all, List<int> matched) =>
+        $"Column '{name}' matches {matched.Count} columns; exactly one is required. Available: "
+        + string.Join(", ", all.Select(c => "'" + (c.Header ?? c.Path ?? "#" + c.Index) + "'"))
+        + (matched.Count > 1
+            ? ". The matching columns are " + string.Join(", ", matched.Select(i => $"'#{i}'" + (all[i].Path != null ? $" (binding path '{all[i].Path}')" : "")))
+              + ": pass the binding path or the '#index' form instead."
+            : ". A column can also be named by binding path or as '#index'.");
+
+    /// <summary>The caption of a column header, without the tooltip an element header may carry.</summary>
+    internal static string? HeaderText(object? header) =>
+        header is DependencyObject element ? TreeWalker.GetSearchableText(element, includeToolTip: false) : ControlOperations.Format(header);
+
+    private static string? HeaderToolTip(object? header) =>
+        header is FrameworkElement { ToolTip: var tip } && tip != null
+            ? tip is DependencyObject content ? TreeWalker.GetSearchableText(content) : ControlOperations.Format(tip)
+            : null;
+
+    internal static bool HeaderMatches(object? header, string name) =>
+        string.Equals(HeaderText(header), name, StringComparison.Ordinal) || string.Equals(ControlOperations.Display(header), name, StringComparison.Ordinal);
 
     private static List<string?> RowCells(DataGrid grid, List<ReadColumn> columns, TextBlock probe, int viewIndex)
     {
@@ -142,17 +184,92 @@ internal static class GridReader
         return -1;
     }
 
-    private static DataGrid ResolveGrid(DependencyObject target)
+    private static bool IsGrid(DependencyObject element) => element is DataGrid || element is ListView { View: GridView };
+
+    /// <summary>The DataGrid, or ListView with a GridView, that the target is, is inside of, or solely contains.</summary>
+    private static ItemsControl ResolveGrid(DependencyObject target)
     {
         // A row, cell or cell content handle reads its owning grid.
         for (var parent = target; parent != null;
              parent = parent is Visual ? VisualTreeHelper.GetParent(parent) : LogicalTreeHelper.GetParent(parent))
-            if (parent is DataGrid owner) return owner;
-        var grids = ControlOperations.Descendants(target).OfType<DataGrid>().Take(2).ToArray();
-        if (grids.Length == 1) return grids[0];
+            if (IsGrid(parent)) return (ItemsControl)parent;
+        var grids = ControlOperations.Descendants(target).Where(IsGrid).Take(2).ToArray();
+        if (grids.Length == 1) return (ItemsControl)grids[0];
         throw new ArgumentException(grids.Length == 0
-            ? $"Expected a DataGrid; {target.GetType().Name} is not one and contains none. Find the grid with type_name='=DataGrid'. Only the standard WPF DataGrid is supported."
-            : $"{target.GetType().Name} contains more than one DataGrid. Pass the handle of the grid to read (find with type_name='=DataGrid').");
+            ? $"Expected a DataGrid or a ListView with a GridView; {target.GetType().Name} is not one and contains none. Find the grid with type_name='=DataGrid' or '=ListView'. Vendor grids are not supported."
+            : $"{target.GetType().Name} contains more than one grid. Pass the handle of the grid to read (find with type_name='=DataGrid' or '=ListView').");
+    }
+
+    /// <summary>ListView + GridView rows: DisplayMemberBinding columns from the data items, template columns from realized rows.</summary>
+    private static GridReadResult ReadList(ListView list, GridView view, ReadGridRequest request, TreeWalker walker)
+    {
+        var all = view.Columns.Select((column, index) =>
+        {
+            var binding = column.DisplayMemberBinding != null && !NeedsVisualTree(column.DisplayMemberBinding) ? column.DisplayMemberBinding : null;
+            return (Column: column, Index: index, Binding: binding, Header: HeaderText(column.Header), Path: PathOf(column.DisplayMemberBinding));
+        }).ToList();
+        var columns = all;
+        if (request.Columns.Count > 0)
+        {
+            columns = new();
+            foreach (var name in request.Columns)
+            {
+                var matches = all.Where(c => HeaderMatches(c.Column.Header, name) || string.Equals(c.Path, name, StringComparison.Ordinal)).ToArray();
+                if (matches.Length == 0 && IndexName(name, all.Count) is int position) matches = new[] { all[position] };
+                if (matches.Length != 1)
+                    throw new ArgumentException(ColumnError(name, all.Select(c => (c.Index, c.Header, c.Path)).ToList(), matches.Select(c => c.Index).ToList()));
+                columns.Add(matches[0]);
+            }
+        }
+
+        var items = list.Items;
+        var result = new GridReadResult
+        {
+            GridHandle = walker.GetOrCreateHandle(list), RowCount = items.Count, Offset = request.Offset,
+            Columns = columns.Select(c => new GridReadColumn
+            {
+                Index = c.Index, Header = c.Header, HeaderToolTip = HeaderToolTip(c.Column.Header), BindingPath = c.Path,
+                Converter = c.Column.DisplayMemberBinding switch
+                {
+                    Binding b => b.Converter?.GetType().Name, MultiBinding m => m.Converter?.GetType().Name, _ => null
+                },
+                ValueSource = c.Binding != null ? "binding" : "visual"
+            }).ToList(),
+            SelectedIndices = ControlOperations.SelectedIndices(list)
+        };
+
+        var probe = new TextBlock { Language = list.Language };
+        var unrealized = false;
+        var end = (int)Math.Min((long)request.Offset + request.Limit, items.Count);
+        for (var row = request.Offset; row < end; row++)
+        {
+            List<DependencyObject>? cells = null;
+            var texts = new List<string?>(columns.Count);
+            foreach (var column in columns)
+            {
+                string? text = null;
+                if (column.Binding != null) text = Evaluate(probe, items[row], column.Binding);
+                else
+                {
+                    // A GridViewRowPresenter holds one child per column, in column order.
+                    cells ??= list.ItemContainerGenerator.ContainerFromIndex(row) is DependencyObject container
+                        && ControlOperations.Descendants(container).OfType<GridViewRowPresenter>().FirstOrDefault() is { } presenter
+                        ? Enumerable.Range(0, VisualTreeHelper.GetChildrenCount(presenter)).Select(i => VisualTreeHelper.GetChild(presenter, i)).ToList()
+                        : new List<DependencyObject>();
+                    if (column.Index < cells.Count) text = TreeWalker.GetSearchableText(cells[column.Index]) ?? TreeWalker.GetDeepText(cells[column.Index]) ?? string.Empty;
+                    else unrealized = true;
+                }
+                texts.Add(Truncate(text));
+            }
+            result.Rows.Add(new GridReadRow { Index = row, Cells = texts });
+        }
+        probe.DataContext = null;
+
+        result.Returned = result.Rows.Count;
+        result.HasMore = end < items.Count;
+        if (unrealized)
+            result.Note = "Columns with valueSource 'visual' have no data binding; their cells are null for rows that are not currently scrolled into view.";
+        return result;
     }
 
     private sealed class ReadColumn
@@ -180,11 +297,12 @@ internal static class GridReader
         var selected = new List<ReadColumn>();
         foreach (var name in names)
         {
-            var matches = all.Where(c => string.Equals(ControlOperations.Display(c.Column.Header), name, StringComparison.Ordinal)
+            var matches = all.Where(c => HeaderMatches(c.Column.Header, name)
                 || string.Equals(BindingPath(c.Column), name, StringComparison.Ordinal)).ToArray();
+            if (matches.Length == 0 && IndexName(name, all.Count) is int position) matches = new[] { all[position] };
             if (matches.Length != 1)
-                throw new ArgumentException($"Column '{name}' matches {matches.Length} columns; exactly one is required. Available: "
-                    + string.Join(", ", all.Select(c => "'" + (ControlOperations.Display(c.Column.Header) ?? BindingPath(c.Column) ?? "#" + c.Index) + "'")));
+                throw new ArgumentException(ColumnError(name,
+                    all.Select(c => (c.Index, HeaderText(c.Column.Header), BindingPath(c.Column))).ToList(), matches.Select(c => c.Index).ToList()));
             selected.Add(matches[0]);
         }
         return selected;

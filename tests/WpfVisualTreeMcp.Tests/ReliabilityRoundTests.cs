@@ -1,5 +1,6 @@
 using FluentAssertions;
 using ModelContextProtocol;
+using Moq;
 using WpfVisualTreeMcp.Server;
 using WpfVisualTreeMcp.Shared.Ipc;
 using WpfVisualTreeMcp.Shared.Models;
@@ -66,6 +67,12 @@ public class ReliabilityRoundTests
         var missing = () => WpfTools.ReadGridWhenAsync(() => throw new McpException("not found"), 1, null, 250, Error);
         (await missing.Should().ThrowAsync<McpException>()).WithMessage("*could not be read: not found*");
 
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        var wrongColumn = () => WpfTools.ReadGridWhenAsync(
+            () => throw new McpException("Column 'Nope' matches 0 columns; exactly one is required. Available: 'Id', 'Name'"), 1, null, 20000, Error);
+        (await wrongColumn.Should().ThrowAsync<McpException>()).WithMessage("*Available: 'Id', 'Name'*");
+        clock.ElapsedMilliseconds.Should().BeLessThan(5000, "a wrong column name fails at once instead of waiting out the timeout");
+
         var invalid = () => WpfTools.ReadGridWhenAsync(() => Task.FromResult(Grid(0)), 1, null, 60000, Error);
         (await invalid.Should().ThrowAsync<McpException>()).WithMessage("*timeout_ms 0-25000*");
     }
@@ -100,6 +107,98 @@ public class ReliabilityRoundTests
         merged.Errors[1].Timestamp.Should().Be(start.AddMinutes(5));
         merged.Errors[1].FirstSeen.Should().Be(start);
         merged.Errors[1].Message.Should().EndWith("HashCode");
+    }
+
+    [Fact]
+    public void TreeOutline_PrintsOneIndentedLinePerElement()
+    {
+        var tree = new VisualTreeResult
+        {
+            TotalElements = 3, MaxDepthReached = true,
+            Root = new VisualTreeNode
+            {
+                Handle = "elem_00000001", TypeName = "System.Windows.Window", Name = "Main",
+                Children =
+                {
+                    new VisualTreeNode
+                    {
+                        Handle = "elem_00000002", TypeName = "System.Windows.Controls.Grid",
+                        Children = { new VisualTreeNode { Handle = "elem_00000003", TypeName = "Demo.Controls.Pager`1[[System.Int32, mscorlib]]", Name = "Pages" } }
+                    }
+                }
+            }
+        };
+
+        WpfTools.TreeOutline(tree).Should().Be(
+            "Window [Main] elem_00000001\n Grid elem_00000002\n  Pager`1[[System.Int32, mscorlib]] [Pages] elem_00000003\n"
+            + "totalElements: 3; max_depth reached, deeper elements omitted");
+    }
+
+    [Fact]
+    public async Task EditGridCell_ResolvesTheGridAndColumnThenCommitsOneEdit()
+    {
+        var bridge = new Moq.Mock<WpfVisualTreeMcp.Automation.Infrastructure.IIpcBridge>();
+        bridge.Setup(x => x.ReadGridAsync("panel", 3, 1, Moq.It.Is<IReadOnlyList<string>>(c => c.Single() == "Quantity")))
+            .ReturnsAsync(new GridReadResult
+            {
+                GridHandle = "grid", RowCount = 10, Returned = 1,
+                Columns = { new GridReadColumn { Index = 4, Header = "Quantity" } },
+                Rows = { new GridReadRow { Index = 3, Cells = new List<string?> { "7" } } }
+            });
+        ControlOperationRequest? sent = null;
+        bridge.Setup(x => x.ControlOperationAsync(Moq.It.IsAny<ControlOperationRequest>()))
+            .Callback<ControlOperationRequest>(request => sent = request)
+            .ReturnsAsync(new ControlOperationResponse { Result = new ControlResult { Changed = true, Value = "12", ColumnIndex = 4, ElementHandle = "cell" } });
+
+        var result = await WpfTools.EditGridCellAsync(bridge.Object, "panel", 3, "Quantity", "12", Error);
+
+        sent!.ElementHandle.Should().Be("grid", "a container handle is replaced by the grid it holds");
+        sent.Operation.Should().Be("grid_edit");
+        sent.Value.Should().Be("12");
+        sent.Row!.Index.Should().Be(3);
+        sent.Column!.Index.Should().Be(4);
+        System.Text.Json.JsonSerializer.Serialize(result).Should().Contain("\"changed\":true").And.Contain("\"previous\":\"7\"").And.Contain("\"value\":\"12\"");
+    }
+
+    [Fact]
+    public async Task EditGridCell_ReportsAChangeTheApplicationAppliedAfterTheCommit()
+    {
+        var bridge = new Moq.Mock<WpfVisualTreeMcp.Automation.Infrastructure.IIpcBridge>();
+        GridReadResult Row(string? cell) => new()
+        {
+            GridHandle = "grid", RowCount = 10, Returned = 1, Columns = { new GridReadColumn { Index = 4, Header = "Paid" } },
+            Rows = { new GridReadRow { Index = 1, Cells = new List<string?> { cell } } }
+        };
+        bridge.Setup(x => x.ReadGridAsync("grid", 1, 1, Moq.It.Is<IReadOnlyList<string>>(c => c.Single() == "Paid"))).ReturnsAsync(Row(""));
+        bridge.Setup(x => x.ReadGridAsync("grid", 1, 1, Moq.It.Is<IReadOnlyList<string>>(c => c.Single() == "#4"))).ReturnsAsync(Row("26 400,00"));
+        bridge.Setup(x => x.ControlOperationAsync(Moq.It.IsAny<ControlOperationRequest>()))
+            .ReturnsAsync(new ControlOperationResponse { Result = new ControlResult { Changed = false, Value = "", ColumnIndex = 4 } });
+
+        var result = await WpfTools.EditGridCellAsync(bridge.Object, "grid", 1, "Paid", "26400", Error);
+
+        System.Text.Json.JsonSerializer.Serialize(result).Should().Contain("\"changed\":true").And.Contain("\"previous\":\"\"").And.Contain("26 400,00");
+    }
+
+    [Fact]
+    public async Task EditGridCell_FailsWithoutEditingWhenTheRowIsMissingOrNotReady()
+    {
+        var bridge = new Moq.Mock<WpfVisualTreeMcp.Automation.Infrastructure.IIpcBridge>();
+        bridge.Setup(x => x.ReadGridAsync("grid", 99, 1, Moq.It.IsAny<IReadOnlyList<string>>()))
+            .ReturnsAsync(new GridReadResult { GridHandle = "grid", RowCount = 10, Returned = 0 });
+        var missing = () => WpfTools.EditGridCellAsync(bridge.Object, "grid", 99, "Quantity", "1", Error);
+        (await missing.Should().ThrowAsync<McpException>()).WithMessage("*Row 99 does not exist*10 row(s)*");
+        bridge.Verify(x => x.ControlOperationAsync(Moq.It.IsAny<ControlOperationRequest>()), Moq.Times.Never);
+
+        bridge.Setup(x => x.ReadGridAsync("grid", 2, 1, Moq.It.IsAny<IReadOnlyList<string>>()))
+            .ReturnsAsync(new GridReadResult
+            {
+                GridHandle = "grid", RowCount = 10, Returned = 1, Columns = { new GridReadColumn { Index = 0 } },
+                Rows = { new GridReadRow { Index = 2, Cells = new List<string?> { "a" } } }
+            });
+        bridge.Setup(x => x.ControlOperationAsync(Moq.It.IsAny<ControlOperationRequest>()))
+            .ReturnsAsync(new ControlOperationResponse { NotReady = true, Reason = "Virtualized grid row has not been realized yet." });
+        var notReady = () => WpfTools.EditGridCellAsync(bridge.Object, "grid", 2, "Quantity", "1", Error);
+        (await notReady.Should().ThrowAsync<McpException>()).WithMessage("*not ready*Nothing was changed*");
     }
 
     [Fact]

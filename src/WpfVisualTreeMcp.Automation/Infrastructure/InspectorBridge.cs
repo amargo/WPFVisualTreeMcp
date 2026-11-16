@@ -711,22 +711,22 @@ public partial class InspectorBridge : IIpcBridge
         return InspectorFeatures.CompatibilityNote(level);
     }
 
-    private static string EmptyResponseError(int processId)
+    /// <summary>The explanation for a request that got no reply because the application is gone; null while it still runs.</summary>
+    private static string? ExitedMessage(int processId)
     {
         // A request that closes the application (Alt+F4, an exit shortcut) ends the pipe before a reply.
+        var message = $"The application (process {processId}) exited before answering; if this request closed it, that is the expected result. Handles from that process are no longer valid.";
         try
         {
             using var process = System.Diagnostics.Process.GetProcessById(processId);
-            if (process.WaitForExit(1000))
-                return $"The application (process {processId}) exited before answering; if this request closed it, that is the expected result. Handles from that process are no longer valid.";
+            return process.WaitForExit(1000) ? message : null;
         }
-        catch (ArgumentException)
-        {
-            return $"The application (process {processId}) exited before answering; if this request closed it, that is the expected result. Handles from that process are no longer valid.";
-        }
-        catch (InvalidOperationException) { }
-        return "Empty response from inspector: the application closed the connection without answering but is still running. Retry, and reattach if it keeps failing.";
+        catch (ArgumentException) { return message; }
+        catch (InvalidOperationException) { return null; }
     }
+
+    private static string EmptyResponseError(int processId) => ExitedMessage(processId)
+        ?? "Empty response from inspector: the application closed the connection without answering but is still running. Retry, and reattach if it keeps failing.";
 
     private async Task ValidateFilterAsync(int processId, Dictionary<string, string>? propertyFilter)
     {
@@ -927,6 +927,13 @@ public partial class InspectorBridge : IIpcBridge
             }
 
             var response = IpcSerializer.DeserializeResponse<TResponse>(responseJson);
+            // Older Inspectors answer a request cancelled by application shutdown with the bare exception text.
+            if (response is { Success: false, Error: not null } && response.Error.Contains("canceled", StringComparison.OrdinalIgnoreCase)
+                && response.Error.Length < 60 && ExitedMessage(processId) is { } exited)
+            {
+                response.Error = exited;
+                return response;
+            }
             if (response is { Success: false, Error: not null } && request is not GetCapabilitiesRequest
                 && await GetCompatibilityNoteAsync(processId) is { } note)
                 response.Error += " Note: " + note;
@@ -944,12 +951,17 @@ public partial class InspectorBridge : IIpcBridge
         }
         catch (IOException ex)
         {
+            if (ExitedMessage(processId) is { } exited)
+                return new TResponse { Success = false, Error = exited };
             var errorMsg = $"Cannot connect to process {processId}: {ex.Message}. The named pipe may not exist. Use wpf_list_processes() to see available WPF applications, then wpf_attach(process_id=<new_pid>) to connect.";
             _logger.LogWarning(ex, errorMsg);
             return new TResponse { Success = false, Error = errorMsg };
         }
         catch (Exception ex)
         {
+            // A request that closes the application can also surface as a cancelled or broken read.
+            if (ExitedMessage(processId) is { } exited)
+                return new TResponse { Success = false, Error = exited };
             _logger.LogError(ex, "Unexpected error sending request to inspector");
             return new TResponse { Success = false, Error = ex.Message };
         }

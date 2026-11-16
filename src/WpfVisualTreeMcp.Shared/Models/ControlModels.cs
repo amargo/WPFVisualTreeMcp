@@ -83,6 +83,8 @@ public sealed class GridReadColumn
     /// <summary>Index in DataGrid.Columns, independent of display reordering.</summary>
     public int Index { get; set; }
     public string? Header { get; set; }
+    /// <summary>Tooltip of an element header; reported apart from the caption.</summary>
+    public string? HeaderToolTip { get; set; }
     /// <summary>Binding path; "." when the binding targets the whole data item, child paths joined for multi-bindings.</summary>
     public string? BindingPath { get; set; }
     /// <summary>The member read for valueSource "sortMemberPath" columns.</summary>

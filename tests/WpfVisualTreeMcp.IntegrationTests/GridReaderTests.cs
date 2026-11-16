@@ -6,6 +6,7 @@ using System.Windows.Markup;
 using FluentAssertions;
 using WpfVisualTreeMcp.Inspector;
 using WpfVisualTreeMcp.Shared.Ipc;
+using WpfVisualTreeMcp.Shared.Models;
 using Xunit;
 
 namespace WpfVisualTreeMcp.IntegrationTests;
@@ -216,6 +217,154 @@ public class GridReaderTests
         public int Key { get; set; }
         public string Label { get; set; } = "";
     }
+
+    [Fact]
+    public Task Reads_a_list_view_with_a_grid_view_like_a_grid() => DiagnosticReporterTests.OnSta(() =>
+    {
+        var view = new GridView();
+        view.Columns.Add(new GridViewColumn { Header = "Id", DisplayMemberBinding = new Binding("Id") });
+        view.Columns.Add(new GridViewColumn { Header = "Amount", DisplayMemberBinding = new Binding("Amount") { StringFormat = "N2" } });
+        view.Columns.Add(new GridViewColumn { Header = "Templated", CellTemplate = Template("Name") });
+        var list = new ListView
+        {
+            View = view, Height = 120, Language = XmlLanguage.GetLanguage("hu-HU"),
+            ItemsSource = Enumerable.Range(0, 300).Select(i => new Row { Id = i, Name = "name" + i, Amount = i + 0.5m }).ToArray()
+        };
+        var panel = new StackPanel(); panel.Children.Add(list);
+        var window = new Window { Content = panel, Width = 400, Height = 200 }; window.Show(); window.UpdateLayout();
+        try
+        {
+            list.SelectedIndex = 2;
+            var result = GridReader.Read(panel, new ReadGridRequest { ElementHandle = "h", Offset = 0, Limit = 500 }, new TreeWalker());
+
+            result.RowCount.Should().Be(300);
+            result.Columns.Select(c => c.Header).Should().Equal("Id", "Amount", "Templated");
+            result.Columns.Select(c => c.ValueSource).Should().Equal("binding", "binding", "visual");
+            result.Columns[1].BindingPath.Should().Be("Amount");
+            result.Rows[0].Cells.Should().Equal("0", 0.5m.ToString("N2", CultureInfo.GetCultureInfo("hu-HU")), "name0");
+            // Off-screen rows: bound columns come from the data, the template column has no visual.
+            result.Rows[299].Cells.Should().Equal("299", 299.5m.ToString("N2", CultureInfo.GetCultureInfo("hu-HU")), null);
+            result.Note.Should().Contain("visual");
+            result.SelectedIndices.Should().Equal(2);
+
+            var some = GridReader.Read(list, new ReadGridRequest { ElementHandle = "h", Offset = 298, Limit = 10, Columns = new() { "Amount", "Id" } }, new TreeWalker());
+            some.Returned.Should().Be(2);
+            some.HasMore.Should().BeFalse();
+            some.Rows[1].Cells[1].Should().Be("299");
+        }
+        finally { window.Close(); }
+    });
+
+    [Fact]
+    public Task Select_item_on_a_cell_selection_grid_selects_a_cell_of_the_row() => DiagnosticReporterTests.OnSta(() =>
+    {
+        var grid = CreateGrid(50);
+        grid.SelectionUnit = DataGridSelectionUnit.Cell;
+        var window = new Window { Content = grid, Width = 400, Height = 200 }; window.Show(); window.UpdateLayout();
+        try
+        {
+            var interactor = new ControlInteractor();
+
+            // WPF throws when a row is selected on such a grid; a cell of the row is selected instead.
+            var byIndex = interactor.SelectItem(grid, null, 40);
+            byIndex.Method.Should().Be("DataGrid.SelectedCells");
+            byIndex.Detail.Should().Contain("SelectionUnit=Cell").And.Contain("row 40").And.Contain("column 'Id'").And.Contain("name40");
+            grid.SelectedCells.Should().ContainSingle().Which.Item.Should().BeSameAs(grid.Items[40]);
+            grid.CurrentCell.Item.Should().BeSameAs(grid.Items[40]);
+
+            interactor.SelectItem(grid, "name7", null);
+            grid.SelectedCells.Should().ContainSingle().Which.Item.Should().BeSameAs(grid.Items[7]);
+            ControlOperations.Descendants(grid).OfType<DataGridCell>().Should().NotContain(c => c.IsEditing, "selecting must not start an edit");
+        }
+        finally { window.Close(); }
+    });
+
+    [Fact]
+    public Task Header_tooltip_is_reported_apart_and_deep_template_cells_are_read() => DiagnosticReporterTests.OnSta(() =>
+    {
+        var grid = CreateGrid(3);
+        grid.Columns.Add(new DataGridTextColumn
+        {
+            Header = new TextBlock { Text = "Stair", ToolTip = "Code of the staircase." }, Binding = new Binding("Name")
+        });
+        // Text nested deeper than the shallow searchable-text scan, in two parts.
+        var deep = (DataTemplate)System.Windows.Markup.XamlReader.Parse(
+            "<DataTemplate xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation'><Border><Grid><Border><Grid><Border><StackPanel Orientation='Horizontal'>"
+            + "<TextBlock Text='{Binding Id}'/><TextBlock Text='{Binding Name}'/></StackPanel></Border></Grid></Border></Grid></Border></DataTemplate>");
+        grid.Columns.Add(new DataGridTemplateColumn { Header = "Deep", CellTemplate = deep });
+        var window = new Window { Content = grid, Width = 700, Height = 300 }; window.Show(); window.UpdateLayout();
+        try
+        {
+            var result = GridReader.Read(grid, new ReadGridRequest { ElementHandle = "h", Offset = 0, Limit = 10, Columns = new() { "Stair", "Deep" } }, new TreeWalker());
+
+            result.Columns[0].Header.Should().Be("Stair");
+            result.Columns[0].HeaderToolTip.Should().Be("Code of the staircase.");
+            result.Columns[1].HeaderToolTip.Should().BeNull();
+            result.Rows[1].Cells.Should().Equal("name1", "1 name1");
+
+            // The caption with its tooltip appended, as older versions reported it, still selects the column.
+            GridReader.Read(grid, new ReadGridRequest { ElementHandle = "h", Offset = 0, Limit = 1, Columns = new() { "Stair Code of the staircase." } }, new TreeWalker())
+                .Columns.Single().Header.Should().Be("Stair");
+        }
+        finally { window.Close(); }
+    });
+
+    [Fact]
+    public Task Physical_typing_focuses_the_editor_inside_a_wrapper_that_cannot_take_focus() => DiagnosticReporterTests.OnSta(() =>
+    {
+        var box = new TextBox();
+        var wrapper = new ContentControl { Focusable = false, Content = new Border { Child = box } };
+        var other = new Button { Content = "other" };
+        var panel = new StackPanel(); panel.Children.Add(other); panel.Children.Add(wrapper);
+        var window = new Window { Content = panel, Width = 300, Height = 200 }; window.Show(); window.UpdateLayout();
+        try
+        {
+            other.Focus();
+            new ControlInteractor().EnsureKeyboardFocusWithin(wrapper).Should().BeTrue();
+            box.IsKeyboardFocused.Should().BeTrue();
+        }
+        finally { window.Close(); }
+    });
+
+    [Fact]
+    public Task Repeated_headers_are_selected_by_index_name_and_the_error_says_so() => DiagnosticReporterTests.OnSta(() =>
+    {
+        var grid = CreateGrid(3);
+        grid.Columns.Add(new DataGridTextColumn { Header = "Name", Binding = new Binding("Amount") });
+        var window = new Window { Content = grid, Width = 500, Height = 200 }; window.Show(); window.UpdateLayout();
+        try
+        {
+            var duplicate = () => GridReader.Read(grid, new ReadGridRequest { ElementHandle = "h", Limit = 1, Columns = new() { "Name" } }, new TreeWalker());
+            duplicate.Should().Throw<ArgumentException>().WithMessage("*matches 2 columns*'#1' (binding path 'Name')*'#4' (binding path 'Amount')*'#index'*");
+
+            var byIndex = GridReader.Read(grid, new ReadGridRequest { ElementHandle = "h", Limit = 1, Columns = new() { "#4", "#0" } }, new TreeWalker());
+            byIndex.Columns.Select(c => c.BindingPath).Should().Equal("Amount", "Id");
+
+            var outside = () => GridReader.Read(grid, new ReadGridRequest { ElementHandle = "h", Limit = 1, Columns = new() { "#9" } }, new TreeWalker());
+            outside.Should().Throw<ArgumentException>().WithMessage("*matches 0 columns*");
+        }
+        finally { window.Close(); }
+    });
+
+    [Fact]
+    public Task Cell_edit_reports_the_value_of_the_data_item() => DiagnosticReporterTests.OnSta(() =>
+    {
+        var grid = CreateGrid(3);
+        grid.IsReadOnly = false;
+        var window = new Window { Content = grid, Width = 500, Height = 200 }; window.Show(); window.UpdateLayout();
+        try
+        {
+            var result = new ControlOperations(new TreeWalker()).Execute(grid, new ControlOperationRequest
+            {
+                ElementHandle = "h", Operation = "grid_edit", Value = "renamed", Row = ItemLocator.At(1), Column = ColumnLocator.At(1)
+            });
+
+            result.Result.Changed.Should().BeTrue();
+            result.Result.Value.Should().Be("renamed");
+            ((Row)grid.Items[1]).Name.Should().Be("renamed");
+        }
+        finally { window.Close(); }
+    });
 
     [Fact]
     public void Exact_type_filter_matches_the_type_and_subclasses_but_not_name_substrings()
