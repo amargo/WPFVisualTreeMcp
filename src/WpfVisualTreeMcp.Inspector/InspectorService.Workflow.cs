@@ -28,6 +28,7 @@ public partial class InspectorService
             "TouchGesture" => HandleTouchGestureAsync(data, token),
             "MousePointer" => HandleMousePointerAsync(data, token),
             "WaitForElement" => HandleWaitForElementAsync(data, token),
+            "SendKeys" => HandleSendKeysAsync(data, token),
             _ => OnDispatcher(() => HandleRequest(type, data, token), token)
         };
     }

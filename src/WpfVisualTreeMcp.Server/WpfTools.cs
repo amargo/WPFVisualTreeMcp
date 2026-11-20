@@ -15,7 +15,11 @@ namespace WpfVisualTreeMcp.Server;
 [McpServerToolType]
 public class WpfTools
 {
-    private const string InputTargetDescription = " Target by exactly one of element_handle or automation_id (exact, case-sensitive AutomationProperties.AutomationId). Use root_handle with automation_id to scope lookup; missing or duplicate IDs fail before input.";
+    private const string InputTargetDescription = " Target by exactly one of element_handle or automation_id (exact, case-sensitive AutomationProperties.AutomationId or, for elements without one, x:Name outside templates, like UI Automation/FlaUI ById). Use root_handle with automation_id to scope lookup; missing or duplicate IDs fail before input.";
+    /// <summary>Default screenshot bounds, shared by MCP and CLI. Small enough to keep image payloads cheap for agents.</summary>
+    internal const int DefaultScreenshotWidth = 1280;
+    internal const int DefaultScreenshotHeight = 800;
+    private const int LargeScreenshotKb = 300;
     private readonly IProcessManager _processManager;
     private readonly IIpcBridge _ipcBridge;
 
@@ -84,6 +88,7 @@ public class WpfTools
         }
 
         var session = await _processManager.AttachToProcessAsync(process_id, process_name, auto_inject);
+        var compatibility = session.InspectorReady ? await _ipcBridge.GetCompatibilityNoteAsync(session.ProcessId) : null;
         return new
         {
             success = session.InspectorReady,
@@ -91,19 +96,95 @@ public class WpfTools
             session_id = session.SessionId,
             main_window_handle = session.MainWindowHandle,
             inspector_status = session.InspectorStatus,
-            inspector_ready = session.InspectorReady
+            inspector_ready = session.InspectorReady,
+            inspector_compatibility = compatibility ?? (session.InspectorReady ? "Inspector matches this server build." : null)
         };
     }
 
     [McpServerTool]
-    [Description("Get the visual tree hierarchy. Use root_handle to start from a specific element (from wpf_find_elements). Use max_depth to control depth (1-100, default 25). For deep UIs like AvalonDock, increase max_depth or use root_handle to zoom into a subtree.")]
-    public async Task<object> WpfGetVisualTree(string? root_handle = null, int max_depth = 25)
+    [Description("Get the visual tree hierarchy. Use root_handle to start from a specific element (from wpf_find_elements). Use max_depth to control depth (1-100, default 25). For deep UIs like AvalonDock, increase max_depth or use root_handle to zoom into a subtree. outline=true returns an indented text outline (one line per element: short type, [name], handle) that is less than half the size of the JSON tree; prefer it for browsing. To locate specific controls use wpf_find_elements instead of dumping the tree.")]
+    public async Task<object> WpfGetVisualTree(string? root_handle = null, int max_depth = 25, bool outline = false)
     {
         if (max_depth < 1) max_depth = 1;
         if (max_depth > 100) max_depth = 100;
 
         var result = await _ipcBridge.GetVisualTreeAsync(root_handle, max_depth);
-        return result;
+        return outline ? TreeOutline(result) : result;
+    }
+
+    /// <summary>
+    /// The tree as indented text: one line per element with its short type name, x:Name and handle.
+    /// Carries the same navigation information as the JSON tree at a fraction of its size.
+    /// </summary>
+    internal static string TreeOutline(VisualTreeResult tree)
+    {
+        var text = new System.Text.StringBuilder();
+        void Append(VisualTreeNode node, int depth)
+        {
+            var type = node.TypeName;
+            var generic = type.IndexOf('`');
+            var dot = type.LastIndexOf('.', generic < 0 ? type.Length - 1 : generic);
+            text.Append(' ', depth).Append(dot < 0 ? type : type.Substring(dot + 1));
+            if (!string.IsNullOrEmpty(node.Name)) text.Append(" [").Append(node.Name).Append(']');
+            text.Append(' ').Append(node.Handle);
+            if (node.NativeContent != null) text.Append(" (native content: ").Append(node.NativeContent.Kind).Append(')');
+            text.Append('\n');
+            foreach (var child in node.Children) Append(child, depth + 1);
+        }
+        Append(tree.Root, 0);
+        text.Append("totalElements: ").Append(tree.TotalElements);
+        if (tree.MaxDepthReached) text.Append("; max_depth reached, deeper elements omitted");
+        return text.ToString();
+    }
+
+    [McpServerTool]
+    [Description("Edit the text of one DataGrid cell: begins the cell edit, sets the editor text, and commits the cell and row, so the application's validation and data binding run as for a user edit. row_index is the wpf_read_grid row index; column is an exact header, binding path or '#index' (position in Columns, for repeated headers). Text columns and template columns with a single TextBox editor only; read-only grids/columns and rejected (invalid) values fail without leaving the cell in edit mode. Returns the cell text after the edit and whether it changed. STATE-CHANGING: this writes application data." + InputTargetDescription)]
+    public async Task<object> WpfEditGridCell(int row_index, string column, string text,
+        string? element_handle = null, string? automation_id = null, string? root_handle = null)
+    {
+        if (row_index < 0 || string.IsNullOrWhiteSpace(column) || text == null)
+            throw new McpException("row_index must be >= 0, and column and text are required.");
+        var handle = await _ipcBridge.ResolveElementHandleAsync(element_handle, automation_id, root_handle);
+        return await EditGridCellAsync(_ipcBridge, handle, row_index, column, text, message => new McpException(message));
+    }
+
+    [McpServerTool]
+    [Description("List or answer native Win32 dialogs of the attached application: MessageBox prompts (Yes/No, OK/Cancel) and other standard dialog windows. They are not WPF elements, so wpf_find_elements and the visual tree cannot see them, and while one is open the application is blocked: a click or key that opened it may report a timeout, and other input tools fail until it is answered. Without answer: returns each open dialog with handle, title, text and buttons (text, isEnabled, isDefault); an empty list means none is open. With answer: presses the push button with that exact caption (case-insensitive, access-key marker ignored; captions follow the Windows display language, so list first) and returns the result plus the dialogs still open. dialog_handle is required only when several dialogs are open. Works when the application is in the background and sends no keyboard or mouse input. STATE-CHANGING when answering: the application acts on the chosen button (e.g. confirms a deletion).")]
+    public async Task<object> WpfNativeDialog(string? answer = null, long? dialog_handle = null)
+    {
+        if (answer != null && string.IsNullOrWhiteSpace(answer)) throw new McpException("answer must be a button caption.");
+        var response = await _ipcBridge.NativeDialogAsync(answer, dialog_handle);
+        return answer == null
+            ? new { dialogs = response.Dialogs }
+            : new { result = response.Detail, dialogs = response.Dialogs };
+    }
+
+    internal static async Task<object> EditGridCellAsync(IIpcBridge bridge, string gridHandle, int rowIndex, string column, string text, Func<string, Exception> error)
+    {
+        // The grid may be given as a container or inner element, and the column by header or binding path.
+        var grid = await bridge.ReadGridAsync(gridHandle, rowIndex, 1, new[] { column });
+        if (grid.Returned == 0) throw error($"Row {rowIndex} does not exist; the grid has {grid.RowCount} row(s).");
+        var response = await bridge.ControlOperationAsync(new WpfVisualTreeMcp.Shared.Ipc.ControlOperationRequest
+        {
+            ElementHandle = grid.GridHandle, Operation = "grid_edit", Value = text,
+            Row = ItemLocator.At(rowIndex), Column = ColumnLocator.At(grid.Columns[0].Index)
+        });
+        if (response.NotReady)
+            throw error("The cell is not ready to edit yet (" + (response.Reason ?? "row or cell not realized") + "). Nothing was changed; retry.");
+        var changed = response.Result.Changed;
+        var value = response.Result.Value;
+        var previous = grid.Rows[0].Cells[0];
+        if (!changed)
+        {
+            // The application may apply the value after the commit returns (deferred recalculation).
+            var now = await bridge.ReadGridAsync(grid.GridHandle, rowIndex, 1, new[] { "#" + grid.Columns[0].Index });
+            if (now.Returned == 1 && now.Rows[0].Cells[0] != previous) { changed = true; value = now.Rows[0].Cells[0]; }
+        }
+        return new
+        {
+            changed, value, previous,
+            rowIndex, columnIndex = response.Result.ColumnIndex, cellHandle = response.Result.ElementHandle
+        };
     }
 
     [McpServerTool]
@@ -120,7 +201,7 @@ public class WpfTools
     }
 
     [McpServerTool]
-    [Description("Query elements across all open windows. Filters combine with AND: automation_id (exact, case-sensitive AutomationProperties.AutomationId), type_name (partial match, e.g. 'Button' matches 'System.Windows.Controls.Button'), element_name (x:Name substring), text (visible text content — matches a Button's caption, TextBlock text, Window title, AutomationProperties.Name, ToolTip; case-insensitive substring), property_filter (object of property name → expected value substring, e.g. {\"IsEnabled\": \"True\"}), visible_only (exclude collapsed/hidden elements — recommended when looking for something the user can see). PREFER text over dumping the tree: e.g. text='Save' + type_name='Button' finds the Save button directly. Results include text, automationId, isVisible, isEnabled and screenBounds (device pixels) so you can pick the right element without extra calls. Returns up to max_results (default 50).")]
+    [Description("Query elements across all open windows. Filters combine with AND: automation_id (exact, case-sensitive AutomationProperties.AutomationId or, for elements without one, x:Name outside templates, like UI Automation/FlaUI ById), type_name (partial match, e.g. 'Button' matches 'System.Windows.Controls.Button'; prefix with '=' for the type itself or types derived from it, e.g. '=DataGrid' finds grids and DataGrid subclasses but not DataGridCell), element_name (x:Name substring), text (visible text content — matches a Button's caption, TextBlock text, Window title, AutomationProperties.Name, ToolTip; case-insensitive substring), property_filter (object of property name → expected value substring, e.g. {\"IsEnabled\": \"True\"}), visible_only (exclude collapsed/hidden elements — recommended when looking for something the user can see), on_screen (stricter: also drops elements scrolled out of their viewport or outside the window, which visible_only keeps), has_text (drop elements without any text). PREFER text over dumping the tree: e.g. text='Save' + type_name='Button' finds the Save button directly. Results include text, automationId, isVisible, isEnabled and screenBounds (device pixels) so you can pick the right element without extra calls. Each result's path is shortened to its nearest ancestors to keep responses small; pass full_path=true for the complete root-to-element path. Returns up to max_results (default 50).")]
     public async Task<object> WpfFindElements(
         string? root_handle = null,
         string? type_name = null,
@@ -129,16 +210,74 @@ public class WpfTools
         JsonElement? property_filter = null,
         bool visible_only = false,
         int max_results = 50,
-        string? automation_id = null)
+        string? automation_id = null,
+        bool full_path = false,
+        bool on_screen = false,
+        bool has_text = false)
     {
         var result = await _ipcBridge.FindElementsAsync(
             root_handle, type_name, element_name, text,
-            ToFilterDictionary(property_filter), visible_only, max_results, automation_id);
+            WithStateFilters(ToFilterDictionary(property_filter), on_screen, has_text), visible_only, max_results, automation_id);
+        return full_path ? result : ShortenPaths(result);
+    }
+
+    /// <summary>on_screen / has_text travel as reserved property_filter keys that the Inspector evaluates.</summary>
+    internal static Dictionary<string, string>? WithStateFilters(Dictionary<string, string>? filter, bool onScreen, bool hasText)
+    {
+        if (!onScreen && !hasText) return filter;
+        filter = filter == null ? new Dictionary<string, string>() : new Dictionary<string, string>(filter);
+        if (onScreen) filter[WpfVisualTreeMcp.Shared.Ipc.FindFilters.OnScreen] = "true";
+        if (hasText) filter[WpfVisualTreeMcp.Shared.Ipc.FindFilters.HasText] = "true";
+        return filter;
+    }
+
+    /// <summary>
+    /// The same trace repeats once per realized row or cell. Identical errors are merged
+    /// (instance hash codes ignored) and counted, newest first; Count stays the raw total.
+    /// </summary>
+    internal static BindingErrorsResult MergeBindingErrors(BindingErrorsResult result)
+    {
+        var merged = result.Errors
+            .GroupBy(e => (e.ElementType, e.ElementName, e.Property, e.BindingPath, e.ErrorType,
+                Message: System.Text.RegularExpressions.Regex.Replace(e.Message, @"(HashCode)=-?\d+", "$1")))
+            .Select(group =>
+            {
+                var latest = group.OrderByDescending(e => e.Timestamp).First();
+                latest.Message = group.Key.Message;
+                latest.Occurrences = group.Count();
+                latest.FirstSeen = group.Count() > 1 ? group.Min(e => e.Timestamp) : null;
+                return latest;
+            })
+            .OrderByDescending(e => e.Timestamp).ToList();
+        return new BindingErrorsResult { Errors = merged, Count = result.Count };
+    }
+
+    internal const int ShortPathSegments = 3;
+
+    /// <summary>
+    /// Full root-to-element paths dominate large result sets (tens of kilobytes for a few dozen
+    /// matches). By default only the nearest ancestors are kept; the handle identifies the element.
+    /// </summary>
+    internal static FindElementsResult ShortenPaths(FindElementsResult result)
+    {
+        foreach (var element in result.Elements) element.Path = ShortenPath(element.Path);
         return result;
     }
 
+    internal static string ShortenPath(string path)
+    {
+        const string separator = " > ";
+        var cut = path.Length;
+        for (var kept = 0; kept < ShortPathSegments; kept++)
+        {
+            cut = path.LastIndexOf(separator, cut - 1, StringComparison.Ordinal);
+            if (cut <= 0) return path;
+        }
+        return "… > " + path.Substring(cut + separator.Length);
+    }
+
     [McpServerTool]
-    [Description("Deep search for ALL elements matching criteria (no result limit). Requires at least type_name, element_name, text or automation_id to avoid returning the entire tree. Same filters as wpf_find_elements: automation_id (exact, case-sensitive), type_name (partial match), element_name (x:Name substring), text (visible text content), property_filter, visible_only. Use root_handle to limit scope.")]
+    [Description("Deep search for ALL elements matching criteria (no result limit). Requires at least type_name, element_name, text or automation_id to avoid returning the entire tree. Same filters as wpf_find_elements: automation_id (exact, case-sensitive), type_name (partial match, or '=Type' for that type and its subclasses only), element_name (x:Name substring), text (visible text content), property_filter, visible_only. Use root_handle to limit scope. Paths are shortened unless full_path=true. on_screen and has_text work as in wpf_find_elements.")]
     public async Task<object> WpfFindElementsDeep(
         string? root_handle = null,
         string? type_name = null,
@@ -146,7 +285,10 @@ public class WpfTools
         string? text = null,
         JsonElement? property_filter = null,
         bool visible_only = false,
-        string? automation_id = null)
+        string? automation_id = null,
+        bool full_path = false,
+        bool on_screen = false,
+        bool has_text = false)
     {
         if (string.IsNullOrEmpty(type_name) && string.IsNullOrEmpty(element_name) && string.IsNullOrEmpty(text) && automation_id == null)
         {
@@ -155,8 +297,8 @@ public class WpfTools
 
         var result = await _ipcBridge.FindElementsDeepAsync(
             root_handle, type_name, element_name, text,
-            ToFilterDictionary(property_filter), visible_only, automation_id);
-        return result;
+            WithStateFilters(ToFilterDictionary(property_filter), on_screen, has_text), visible_only, automation_id);
+        return full_path ? result : ShortenPaths(result);
     }
 
     private static Dictionary<string, string>? ToFilterDictionary(JsonElement? propertyFilter)
@@ -188,11 +330,10 @@ public class WpfTools
     }
 
     [McpServerTool]
-    [Description("List all binding errors captured since application start. Errors are detected via WPF trace listener. Use wpf_clear_binding_errors to reset the list.")]
+    [Description("List binding errors captured since application start (WPF trace listener). Identical errors are merged, newest first: occurrences says how often each one happened and firstSeen when it first did; count is the raw total. Use wpf_clear_binding_errors to reset the list.")]
     public async Task<object> WpfGetBindingErrors()
     {
-        var result = await _ipcBridge.GetBindingErrorsAsync();
-        return result;
+        return MergeBindingErrors(await _ipcBridge.GetBindingErrorsAsync());
     }
 
     [McpServerTool]
@@ -210,6 +351,67 @@ public class WpfTools
         if (max_elements is < 1 or > 2000 || max_depth is < 1 or > 100 || max_findings is < 1 or > 500)
             throw new McpException("Report limits: max_elements 1-2000, max_depth 1-100, max_findings 1-500.");
         return _ipcBridge.ReportAsync(root_handle, max_elements, max_depth, max_findings);
+    }
+
+    [McpServerTool]
+    [Description("Read DataGrid rows as text without screenshots or scrolling: values are evaluated from the data items through the column bindings (converters and StringFormat applied), so virtualized/off-screen rows are included. Returns rowCount, columns (index, header, headerToolTip, bindingPath, valueSource) and rows as {index, cells[]} with cells in column order, plus selectedIndices, currentRowIndex and hasMore. Page with offset/limit (limit 1-500, default 50); row indices follow the current sorted/filtered view and match wpf_select_item index. columns optionally restricts output to exact headers, binding paths or '#index' names (fewer tokens); default is every visible column in display order. The target may be the DataGrid, any element inside it, or a container holding exactly one DataGrid. Template columns without a data binding (valueSource='visual') only have text for rows currently on screen; DataGridComboBoxColumn returns the display text when the column defines its ItemsSource, otherwise the bound value, which can be a key. Standard WPF DataGrid only. Read-only. To wait for data instead of polling, pass min_rows and/or contains_text (a cell of the returned page containing that text): the call retries up to timeout_ms (default 5000, max 25000) until the grid exists and satisfies them, then returns the rows with waitedMs; it fails on timeout, so a returned result means the condition held." + InputTargetDescription)]
+    public async Task<GridReadResult> WpfReadGrid(string? element_handle = null, string? automation_id = null, string? root_handle = null,
+        int offset = 0, int limit = 50, string[]? columns = null,
+        int min_rows = 0, string? contains_text = null, int timeout_ms = DefaultGridWaitMs)
+    {
+        if (offset < 0 || limit is < 1 or > WpfVisualTreeMcp.Shared.Ipc.ReadGridRequest.MaxLimit)
+            throw new McpException("offset must be >= 0 and limit 1-500.");
+        return await ReadGridWhenAsync(async () =>
+        {
+            var handle = await _ipcBridge.ResolveElementHandleAsync(element_handle, automation_id, root_handle);
+            return await _ipcBridge.ReadGridAsync(handle, offset, limit, columns);
+        }, min_rows, contains_text, timeout_ms, message => new McpException(message));
+    }
+
+    internal const int DefaultGridWaitMs = 5000;
+    internal const int MaxGridWaitMs = 25000;
+    internal const int GridWaitPollMs = 200;
+
+    /// <summary>
+    /// Reads a grid, optionally waiting until it has loaded: at least <paramref name="minRows"/> rows
+    /// and/or a cell of the requested page containing <paramref name="containsText"/>. Polling is
+    /// read-only; a grid that does not exist yet (window still opening) counts as not ready.
+    /// </summary>
+    internal static async Task<GridReadResult> ReadGridWhenAsync(Func<Task<GridReadResult>> read, int minRows,
+        string? containsText, int timeoutMs, Func<string, Exception> error)
+    {
+        var waiting = minRows > 0 || !string.IsNullOrEmpty(containsText);
+        if (minRows < 0 || timeoutMs is < 0 or > MaxGridWaitMs)
+            throw error($"min_rows must be >= 0 and timeout_ms 0-{MaxGridWaitMs}.");
+        if (!waiting) return await read();
+
+        bool Ready(GridReadResult grid) => grid.RowCount >= minRows && (string.IsNullOrEmpty(containsText)
+            || grid.Rows.Any(row => row.Cells.Any(cell => cell != null && cell.Contains(containsText!, StringComparison.OrdinalIgnoreCase))));
+        var condition = (minRows > 0 ? $"at least {minRows} row(s)" : "")
+            + (minRows > 0 && !string.IsNullOrEmpty(containsText) ? " and " : "")
+            + (!string.IsNullOrEmpty(containsText) ? $"a cell containing '{containsText}' in rows {{0}}" : "");
+
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        while (true)
+        {
+            GridReadResult? grid = null;
+            string? failure = null;
+            try { grid = await read(); }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // A wrong column name on a grid that has columns will not fix itself by waiting.
+                if (ex.Message.Contains("exactly one is required. Available: '", StringComparison.Ordinal)) throw;
+                failure = ex.Message;
+            }
+            if (grid != null && Ready(grid)) { grid.WaitedMs = (int)clock.ElapsedMilliseconds; return grid; }
+            if (clock.ElapsedMilliseconds >= timeoutMs)
+            {
+                var wanted = string.Format(condition, grid == null ? "requested" : $"{grid.Offset}-{grid.Offset + Math.Max(grid.Returned - 1, 0)}");
+                throw error($"Timed out after {timeoutMs} ms waiting for {wanted}. "
+                    + (grid != null ? $"The grid has {grid.RowCount} row(s)." : $"The grid could not be read: {failure}"));
+            }
+            await Task.Delay(GridWaitPollMs);
+        }
     }
 
     [McpServerTool]
@@ -282,7 +484,7 @@ public class WpfTools
     }
 
     [McpServerTool]
-    [Description("Wait until an element matching the criteria satisfies a condition, polling in the target app so you don't have to sleep-and-retry. Identify the element with automation_id (exact, case-sensitive), type_name, element_name and/or text (same matching as wpf_find_elements). condition: 'visible' (default — element exists and is on screen), 'exists' (in the tree even if not visible), 'enabled' (visible and IsEnabled=true), 'hidden' (no matching visible element — e.g. a spinner disappeared). Returns matched (bool), waited_ms, and matched_handle/element_type when found. Use after a click that triggers async work (dialog opens, spinner clears, button enables) before the next step. timeout_ms default 10000 (max 25000); poll_interval_ms default 250.")]
+    [Description("Wait until an element matching the criteria satisfies a condition, polling in the target app so you don't have to sleep-and-retry. Identify the element with automation_id (exact, case-sensitive), type_name, element_name and/or text (same matching as wpf_find_elements: type_name is a partial match, so 'DataGridRow' also matches DataGridRowsPresenter; use '=DataGridRow' for that type and its subclasses only). condition: 'visible' (default — element exists and is on screen), 'exists' (in the tree even if not visible), 'enabled' (visible and IsEnabled=true), 'hidden' (no matching visible element — e.g. a spinner disappeared). Returns matched (bool), waited_ms, and matched_handle/element_type when found. Use after a click that triggers async work (dialog opens, spinner clears, button enables) before the next step. timeout_ms default 10000 (max 25000); poll_interval_ms default 250.")]
     public async Task<object> WpfWaitForElement(
         string? type_name = null,
         string? element_name = null,
@@ -443,7 +645,7 @@ public class WpfTools
     }
 
     [McpServerTool]
-    [Description("Click a UI element. Supply exactly one of element_handle or automation_id (exact, case-sensitive AutomationProperties.AutomationId; no handle lookup needed). IDs must match a unique control across all open windows, including hidden controls. Use root_handle with automation_id to scope to a window or subtree if IDs repeat. Missing or ambiguous IDs return an error without clicking. By default invokes the control's action via UI Automation (works for buttons, menu items, checkboxes, radio buttons, tabs, list items, expanders) without moving the mouse or focusing the window. Set physical=true to perform a real OS mouse click at the element's on-screen position (works on any visible element but moves the cursor and brings the window forward; auto-scrolls the element into view first). Optional paired x/y select a point in local WPF DIPs and imply physical input; omitted coordinates use the center. click_type: 'single' (default), 'double' (open items), 'right' (context menus) — double and right are always physical. After opening a context menu or dropdown, use wpf_capture_screenshot with mode='screen' to see it. STATE-CHANGING.")]
+    [Description("Click a UI element. Supply exactly one of element_handle or automation_id (exact, case-sensitive AutomationProperties.AutomationId or, without one, x:Name; no handle lookup needed). IDs must match a unique control across all open windows, including hidden controls. Use root_handle with automation_id to scope to a window or subtree if IDs repeat. Missing or ambiguous IDs return an error without clicking. By default invokes the control's action via UI Automation (works for buttons, menu items, checkboxes, radio buttons, tabs, list items, expanders) without moving the mouse or focusing the window. Set physical=true to perform a real OS mouse click at the element's on-screen position (works on any visible element but moves the cursor and brings the window forward; auto-scrolls the element into view first). Optional paired x/y select a point in local WPF DIPs and imply physical input; omitted coordinates use the center. click_type: 'single' (default), 'double' (open items), 'right' (context menus) — double and right are always physical. After opening a context menu or dropdown, use wpf_capture_screenshot with mode='screen' to see it. STATE-CHANGING.")]
     public async Task<object> WpfClickElement(string? element_handle = null, bool physical = false, string? click_type = null, double? x = null, double? y = null,
         string? automation_id = null, string? root_handle = null)
     {
@@ -540,7 +742,7 @@ public class WpfTools
     }
 
     [McpServerTool]
-    [Description("Select an item in a ComboBox, ListBox, ListView or TabControl by visible text (item_text, case-insensitive substring) or zero-based index. PREFER this over clicking for dropdowns/lists: it works even when items are virtualized (not yet in the visual tree) and raises proper selection events. On failure the error lists the available items. STATE-CHANGING." + InputTargetDescription)]
+    [Description("Select an item in a ComboBox, ListBox, ListView, DataGrid or TabControl by visible text (item_text, case-insensitive substring) or zero-based index. For a DataGrid, item_text matches any visible cell of a row (the texts wpf_read_grid returns; first matching row wins) and index is the wpf_read_grid row index. A selected DataGrid row is scrolled into view, made the current row and given keyboard focus, so a following wpf_send_keys to the grid (e.g. Enter) acts on that row. Selecting is not activating: selection is set without mouse or keyboard input, so an application that loads details or opens a record only on Enter or double-click has not done so yet; follow with wpf_send_keys Enter or a double click, and verify the application reacted. PREFER this over clicking for dropdowns/lists: it works even when items are virtualized (not yet in the visual tree) and raises proper selection events. On failure the error lists the available items. STATE-CHANGING." + InputTargetDescription)]
     public async Task<object> WpfSelectItem(string? element_handle = null, string? item_text = null, int? index = null,
         string? automation_id = null, string? root_handle = null)
     {
@@ -561,7 +763,7 @@ public class WpfTools
     }
 
     [McpServerTool]
-    [Description("Set the text/value of a UI element (TextBox, ComboBox, etc.). By default uses UI Automation IValueProvider.SetValue (clean, no focus needed, raises proper events). Falls back to setting TextBox.Text or PasswordBox.Password directly, or a reflected string 'Text' property. Set physical=true to focus the element and type via OS keyboard input (clears existing text with Ctrl+A/Delete first, then types each character; moves window focus). STATE-CHANGING." + InputTargetDescription)]
+    [Description("Set the text/value of a UI element (TextBox, ComboBox, etc.). By default uses UI Automation IValueProvider.SetValue (clean, no focus needed, raises proper events). Falls back to setting TextBox.Text or PasswordBox.Password directly, or a reflected string 'Text' property. Set physical=true to focus the element and type via OS keyboard input (clears existing text with Ctrl+A/Delete first, then types each character; moves window focus; on a composite control it types into the inner text box; nothing is typed unless the application owns the foreground). Focus stays in the field, so a binding that updates on LostFocus (the TextBox default) keeps its old source value until focus leaves: the result says so, send Tab with wpf_send_keys to commit. STATE-CHANGING." + InputTargetDescription)]
     public async Task<object> WpfSetText(string text, string? element_handle = null, bool physical = false,
         string? automation_id = null, string? root_handle = null)
     {
@@ -598,11 +800,11 @@ public class WpfTools
     }
 
     [McpServerTool]
-    [Description("Capture a screenshot of the WPF window or a specific element. Returns an image that can be visually analyzed. Use element_handle to capture a specific element, or omit for the entire window. mode='auto' (default) uses screen capture when native HwndHost content is present, otherwise render; the response states the mode. Native content needs a visible unobstructed desktop. Explicit mode='render' rejects native content instead of returning a blank image, and re-renders the visual off-screen — works even if the window is covered, but CANNOT see open Popups, ComboBox dropdowns, context menus or tooltips. mode='screen' captures the actual on-screen pixels (GDI) and DOES include them — use it right after clicking something that opened a popup/menu; requires the window to be visible and unobstructed. Set full_content=true with render mode to capture all content in a ScrollViewer, including unscrolled and virtualized content; the original scroll position is restored.")]
+    [Description("Capture a screenshot of the WPF window or a specific element. Returns an image that can be visually analyzed. IMAGES ARE EXPENSIVE: prefer text tools first (wpf_find_elements, wpf_read_grid for DataGrid rows, wpf_report, wpf_get_element_properties) and capture only when appearance itself matters. Pass element_handle to capture just the relevant element instead of the whole window. Output is downscaled to fit max_width x max_height (default 1280x800; raise up to 3840x2160 only when small text must be legible). mode='auto' (default) uses screen capture when native HwndHost content is present, otherwise render; the response states the mode. Native content needs a visible unobstructed desktop. Explicit mode='render' rejects native content instead of returning a blank image, and re-renders the visual off-screen — works even if the window is covered, but CANNOT see open Popups, ComboBox dropdowns, context menus or tooltips. mode='screen' captures the actual on-screen pixels (GDI) and DOES include them — use it right after clicking something that opened a popup/menu; requires the window to be visible and unobstructed. Set full_content=true with render mode to capture all content in a ScrollViewer, including unscrolled and virtualized content; the original scroll position is restored.")]
     public async Task<CallToolResult> WpfCaptureScreenshot(
         string? element_handle = null,
-        int max_width = 1920,
-        int max_height = 1080,
+        int max_width = DefaultScreenshotWidth,
+        int max_height = DefaultScreenshotHeight,
         string mode = "auto",
         bool full_content = false)
     {
@@ -621,6 +823,10 @@ public class WpfTools
 
         if (full_content && mode == "auto") mode = "render";
         var result = await _ipcBridge.CaptureScreenshotAsync(element_handle, max_width, max_height, mode, full_content);
+        var sizeKb = (result.ImageBase64.Length * 3L / 4 + 1023) / 1024;
+        var sizeHint = sizeKb > LargeScreenshotKb
+            ? " Large image: pass element_handle to capture only the relevant element, lower max_width/max_height, or read text with wpf_find_elements / wpf_read_grid instead."
+            : string.Empty;
 
         var content = new List<ContentBlock>
         {
@@ -631,7 +837,7 @@ public class WpfTools
             },
             new TextContentBlock
             {
-                Text = $"Screenshot captured: {result.Width}x{result.Height}px, element type: {result.ElementType ?? "Window"}, mode: {result.CaptureMode ?? mode}. {result.Detail}"
+                Text = $"Screenshot captured: {result.Width}x{result.Height}px, {sizeKb} KB PNG, element type: {result.ElementType ?? "Window"}, mode: {result.CaptureMode ?? mode}. {result.Detail}{sizeHint}"
             }
         };
 

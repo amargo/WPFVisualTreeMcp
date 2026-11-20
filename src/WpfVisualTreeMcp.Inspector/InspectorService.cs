@@ -215,6 +215,18 @@ public partial class InspectorService : IDisposable
         {
             DebugLog($"HandleRequestAsync: requestType={requestType}");
 
+            // Native dialogs block the UI thread and usually the request that opened them, which
+            // still holds the interaction gate: answer them without the Dispatcher or the gate.
+            if (requestType == "NativeDialog")
+            {
+                var dialog = IpcSerializer.DeserializeRequestData<NativeDialogRequest>(data)!;
+                return await Task.Run(() =>
+                {
+                    var detail = dialog.Button == null ? null : NativeDialogs.Answer(dialog.DialogHandle, dialog.Button);
+                    return new NativeDialogResponse { Dialogs = NativeDialogs.List(), Detail = detail };
+                }).ConfigureAwait(false);
+            }
+
             if (Application.Current == null)
             {
                 DebugLog("ERROR: Application.Current is NULL!");
@@ -267,7 +279,10 @@ public partial class InspectorService : IDisposable
         catch (Exception ex)
         {
             DebugLog($"ERROR in HandleRequestAsync: {ex.Message}\n{ex.StackTrace}");
-            return new GetVisualTreeResponse { Success = false, Error = ex.Message };
+            // A request that closes the application is cancelled by the shutdown it caused.
+            var closing = ex is OperationCanceledException
+                && (_inputShutdown.IsCancellationRequested || Application.Current?.Dispatcher.HasShutdownStarted != false);
+            return new GetVisualTreeResponse { Success = false, Error = closing ? IpcErrors.ApplicationClosing : ex.Message };
         }
         finally
         {
@@ -340,7 +355,7 @@ public partial class InspectorService : IDisposable
     {
         return requestType switch
         {
-            "GetCapabilities" => new GetCapabilitiesResponse { CoordinatePointerInput = true, AutomationIdTargeting = true, AutomationIdOptionalResolution = true, AdvancedAutomation = true, PropertySubscriptions = true },
+            "GetCapabilities" => new GetCapabilitiesResponse { CoordinatePointerInput = true, AutomationIdTargeting = true, AutomationIdOptionalResolution = true, AdvancedAutomation = true, PropertySubscriptions = true, GridRead = true, NativeDialogs = true, AutomationIdNameFallback = true, FeatureLevel = InspectorFeatures.Level },
             "ResolveAutomationId" => HandleResolveAutomationId(data),
             "Record" => HandleRecord(data),
             "AssertElement" => HandleAssertElement(data),
@@ -358,6 +373,7 @@ public partial class InspectorService : IDisposable
             "WatchProperty" => HandleWatchProperty(data),
             "UnwatchProperty" => HandleUnwatchProperty(data),
             "ControlOperation" => HandleControlOperation(data),
+            "ReadGrid" => HandleReadGrid(data),
             "Window" => HandleWindow(data),
             "ExportTree" => HandleExportTree(data),
             "CaptureScreenshot" => HandleCaptureScreenshot(data, captureToken),
@@ -476,9 +492,9 @@ public partial class InspectorService : IDisposable
         IEnumerable<DependencyObject> roots = request.RootHandle == null ? TreeWalker.GetAllSearchRoots() :
             new[] { _treeWalker.ResolveHandle(request.RootHandle)
                 ?? throw new InvalidOperationException(StaleHandleError(request.RootHandle)) };
-        var element = AutomationIdResolver.ResolveOrDefault(request.AutomationId, roots);
+        var element = AutomationIdResolver.ResolveOrDefault(request.AutomationId, roots, _treeWalker.GetOrCreateHandle);
         if (element == null)
-            return new ResolveAutomationIdResponse { Success = false, NotFound = true, Error = "AutomationId '" + request.AutomationId + "' was not found in the requested scope." };
+            return new ResolveAutomationIdResponse { Success = false, NotFound = true, Error = AutomationIdResolver.NotFoundMessage(request.AutomationId, roots) };
         return new ResolveAutomationIdResponse { ElementHandle = _treeWalker.GetOrCreateHandle(element) };
     }
 
@@ -1437,6 +1453,94 @@ public partial class InspectorService : IDisposable
         {
             DebugLog($"SetText failed: {ex.Message}");
             return new SetTextResponse { Success = false, Error = ex.Message };
+        }
+    }
+
+    /// <summary>
+    /// OS key input goes to whichever window is in the foreground. Keys are therefore sent only
+    /// after this application verifiably owns the foreground, and the reply says when WPF never
+    /// saw the key (a global hotkey or another window took it). Waiting happens off the
+    /// Dispatcher so the application keeps processing activation and input.
+    /// </summary>
+    private async Task<IpcResponse> HandleSendKeysAsync(JsonElement data, CancellationToken token)
+    {
+        var request = IpcSerializer.DeserializeRequestData<SendKeysRequest>(data);
+        if (request == null || string.IsNullOrWhiteSpace(request.Keys))
+            return new SendKeysResponse { Success = false, Error = "Keys required (e.g. \"Ctrl+S\")" };
+
+        try
+        {
+            string? elementType = null;
+            string? targetError = null;
+            UIElement? element = null;
+            var activated = await OnDispatcher(() =>
+            {
+                if (!string.IsNullOrEmpty(request.ElementHandle))
+                {
+                    var resolved = _treeWalker.ResolveHandle(request.ElementHandle!);
+                    if (resolved == null) { targetError = StaleHandleError(request.ElementHandle!); return false; }
+                    element = resolved as UIElement;
+                    if (element == null) { targetError = WrongElementTypeError(request.ElementHandle!, resolved, "UIElement"); return false; }
+                    elementType = element.GetType().Name;
+                }
+                return _interactor.PrepareKeys(element, request.Keys!);
+            }, token).ConfigureAwait(false);
+            if (targetError != null) return new SendKeysResponse { Success = false, Error = targetError };
+
+            var clock = System.Diagnostics.Stopwatch.StartNew();
+            while (!PhysicalInputGuard.OwnsForeground())
+            {
+                if (clock.ElapsedMilliseconds > 1500)
+                    return new SendKeysResponse
+                    {
+                        Success = false,
+                        Error = "No keys were sent: the attached application is not the foreground window, so the keys would have gone to another application. "
+                            + (request.ElementHandle == null
+                                ? "Pass element_handle so its window can be activated, or bring the application to the front."
+                                : "Windows refused to bring it to the front; click the application (wpf_click_element physical=true) or bring it forward, then retry.")
+                    };
+                await Task.Delay(20, token).ConfigureAwait(false);
+            }
+            // The first key after an activation is lost when it is sent before the application has
+            // processed the activation: wait for that, then confirm focus is where the keys belong.
+            if (activated)
+                await OnDispatcher(() => true, token, System.Windows.Threading.DispatcherPriority.Background).ConfigureAwait(false);
+            var focused = element == null
+                || await OnDispatcher(() => _interactor.EnsureKeyboardFocusWithin(element), token, System.Windows.Threading.DispatcherPriority.Input).ConfigureAwait(false);
+            if (activated)
+                await OnDispatcher(() => true, token, System.Windows.Threading.DispatcherPriority.ApplicationIdle).ConfigureAwait(false);
+            if (!PhysicalInputGuard.OwnsForeground())
+                return new SendKeysResponse { Success = false, Error = "No keys were sent: the attached application lost the foreground again while it was being activated. Retry." };
+
+            ControlInteractor.KeyDeliveryProbe? probe = null;
+            var outcome = await OnDispatcher(() =>
+            {
+                probe = _interactor.StartKeyDeliveryProbe(request.Keys!);
+                return _interactor.SendPreparedKeys(request.Keys!);
+            }, token).ConfigureAwait(false);
+            DebugLog($"SendKeys: '{request.Keys}' to {elementType ?? "(focused)"}");
+
+            clock.Restart();
+            while (probe!.Received == 0 && clock.ElapsedMilliseconds < 500)
+                await Task.Delay(15, token).ConfigureAwait(false);
+            var received = probe.Received;
+            _ = Application.Current?.Dispatcher.BeginInvoke(new Action(probe.Stop));
+
+            var detail = outcome.Detail;
+            if (activated) detail += "; the application was brought to the foreground first";
+            if (!focused) detail += "; keyboard focus could not be placed inside the target, so the key went to the application's focused element instead";
+            if (received == 0)
+                detail += "; WARNING: the application's WPF input did not receive the key (modifiers aside). A system-wide hotkey may have consumed it, "
+                    + "another window may have taken focus, or focus is inside native (non-WPF) content. Verify the effect before continuing.";
+            return new SendKeysResponse
+            {
+                RequestId = request.RequestId, Method = outcome.Method, ElementType = elementType, Detail = detail
+            };
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            DebugLog($"SendKeys failed: {ex.Message}");
+            return new SendKeysResponse { Success = false, Error = ex.Message };
         }
     }
 

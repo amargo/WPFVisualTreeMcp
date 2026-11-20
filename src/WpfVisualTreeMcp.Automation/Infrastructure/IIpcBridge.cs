@@ -10,6 +10,8 @@ public interface IIpcBridge
 {
     Task<ControlOperationResponse> ControlOperationAsync(ControlOperationRequest request);
     Task<WindowResponse> WindowAsync(WindowRequest request);
+    /// <summary>Lists native Win32 dialogs of the attached process; with <paramref name="button"/>, presses that button first.</summary>
+    Task<NativeDialogResponse> NativeDialogAsync(string? button = null, long? dialogHandle = null);
     Task<PropertySubscription> ObservePropertyAsync(string elementHandle, string propertyName);
     Task UnwatchPropertyAsync(string watchId);
     Task<RecordingState> RecordAsync(string action, string? name = null);
@@ -132,6 +134,15 @@ public interface IIpcBridge
     /// is supported by render mode only.
     /// </summary>
     Task<ScreenshotResult> CaptureScreenshotAsync(string? elementHandle, int maxWidth, int maxHeight, string mode = "auto", bool fullContent = false);
+
+    /// <summary>Guidance when the attached app's Inspector and this server are different builds; null when they match.</summary>
+    Task<string?> GetCompatibilityNoteAsync(int? processId = null);
+
+    /// <summary>
+    /// Reads a page of DataGrid rows as text from the data items (no scrolling, virtualized rows included).
+    /// <paramref name="columns"/> optionally selects columns by exact header or binding path.
+    /// </summary>
+    Task<GridReadResult> ReadGridAsync(string elementHandle, int offset, int limit, IReadOnlyList<string>? columns = null);
 
     /// <summary>
     /// Gets the DataContext chain for an element.

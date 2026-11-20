@@ -748,7 +748,7 @@ public class WpfToolsTests
     {
         // Arrange
         _ipcBridgeMock
-            .Setup(x => x.CaptureScreenshotAsync("elem_1", 1920, 1080, "screen", false))
+            .Setup(x => x.CaptureScreenshotAsync("elem_1", 1280, 800, "screen", false))
             .ReturnsAsync(new ScreenshotResult
             {
                 ImageBase64 = "iVBORw0KGgo=",
@@ -765,7 +765,7 @@ public class WpfToolsTests
         // Assert
         result.Content.Should().HaveCount(2);
         _ipcBridgeMock.Verify(
-            x => x.CaptureScreenshotAsync("elem_1", 1920, 1080, "screen", false),
+            x => x.CaptureScreenshotAsync("elem_1", 1280, 800, "screen", false),
             Times.Once);
     }
 

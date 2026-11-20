@@ -9,6 +9,7 @@ using System.Windows.Automation.Peers;
 using System.Windows.Automation.Provider;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
+using System.Windows.Data;
 using System.Windows.Input;
 using System.Windows.Media;
 using WpfVisualTreeMcp.Shared.Models;
@@ -153,7 +154,7 @@ internal sealed class ControlInteractor
     {
         MousePointerOptions.ValidatePoint(x, y);
         EnsureInteractable(element, "used for pointer input");
-        Window.GetWindow(element)?.Activate();
+        BringToForeground(Window.GetWindow(element));
         ScrollIntoView(element);
         var screen = element.PointToScreen(LocalPoint(element, x, y));
         EnsureHit(element, screen);
@@ -184,7 +185,7 @@ internal sealed class ControlInteractor
         options.Validate();
         EnsureInteractable(source, "dragged");
         if (target != null) EnsureInteractable(target, "used as a drag target");
-        Window.GetWindow(source)?.Activate();
+        BringToForeground(Window.GetWindow(source));
         // Scroll before resolving either endpoint: bringing one element into view
         // can move the other. Both must still pass hit testing after layout.
         if (target != null) ScrollIntoView(target);
@@ -214,7 +215,7 @@ internal sealed class ControlInteractor
     {
         options.Validate();
         EnsureInteractable(element, "touched");
-        Window.GetWindow(element)?.Activate();
+        BringToForeground(Window.GetWindow(element));
         ScrollIntoView(element);
         var center = LocalPoint(element, options.X, options.Y);
         var size = element.RenderSize;
@@ -349,8 +350,24 @@ internal sealed class ControlInteractor
     {
         if (!FocusForKeyboardInput(element))
             throw new InvalidOperationException(
-                "Element is not focusable; physical typing has nowhere to land. " +
-                "Use the default UI Automation mode or set Focusable=true.");
+                "Neither the element nor anything inside it can take keyboard focus; physical typing has nowhere to land. " +
+                "Use the default UI Automation mode or target the inner text box.");
+        // A composite control can take focus itself without passing it to its editor (it depends on
+        // where focus was before); typed text then bypasses the editor's bindings. Text belongs in
+        // the editor, so move there unless focus already is in an editor of this element.
+        if (!IsEditor(element) && !(Keyboard.FocusedElement is UIElement current && IsEditor(current) && IsWithin(current, element)))
+            ControlOperations.Descendants(element).OfType<UIElement>()
+                .FirstOrDefault(e => IsEditor(e) && e.Focusable && e.IsVisible && e.IsEnabled)?.Focus();
+        if (!PhysicalInputGuard.OwnsForeground())
+            throw new InvalidOperationException(
+                "The attached application does not own the foreground, so typed text would go to another window; nothing was typed. " +
+                "Bring the application to the front or use the default UI Automation mode.");
+        var focus = Keyboard.FocusedElement as DependencyObject;
+        var landed = focus != null && !ReferenceEquals(focus, element) ? $" into the inner {focus.GetType().Name}" : "";
+        var warning = focus is UIElement target && IsEditor(target) ? ""
+            : $" (keyboard focus is on {focus?.GetType().Name ?? "nothing"}, not a text editor: verify the value and its binding)";
+        if (CommitsOnLostFocus(focus, element))
+            warning += " (the Text binding updates its source on LostFocus and focus is still in the field: the bound value is unchanged until focus leaves, e.g. send Tab)";
 
         // Select-all + delete the existing content first.
         NativeMethods.KeyDown(NativeMethods.VK_CONTROL);
@@ -365,7 +382,35 @@ internal sealed class ControlInteractor
             NativeMethods.SendUnicodeChar(c);
         }
 
-        return new InteractionOutcome("Physical", $"typed {text.Length} char(s) after Ctrl+A/Delete");
+        return new InteractionOutcome("Physical", $"typed {text.Length} char(s){landed} after Ctrl+A/Delete{warning}");
+    }
+
+    /// <summary>True when a Text binding between the focused editor and the targeted element writes its source only on LostFocus.</summary>
+    internal static bool CommitsOnLostFocus(DependencyObject? focus, DependencyObject element)
+    {
+        for (var current = focus; current != null; current = current is Visual ? VisualTreeHelper.GetParent(current) : LogicalTreeHelper.GetParent(current))
+        {
+            var property = System.ComponentModel.DependencyPropertyDescriptor.FromName("Text", current.GetType(), current.GetType())?.DependencyProperty;
+            var binding = property == null ? null : BindingOperations.GetBindingExpression(current, property)?.ParentBinding;
+            if (binding != null && binding.Mode is not (BindingMode.OneWay or BindingMode.OneTime))
+            {
+                var trigger = binding.UpdateSourceTrigger;
+                if (trigger == UpdateSourceTrigger.Default)
+                    trigger = (property!.GetMetadata(current) as FrameworkPropertyMetadata)?.DefaultUpdateSourceTrigger ?? UpdateSourceTrigger.PropertyChanged;
+                if (trigger == UpdateSourceTrigger.LostFocus) return true;
+            }
+            if (ReferenceEquals(current, element)) break;
+        }
+        return false;
+    }
+
+    private static bool IsEditor(UIElement element) => element is System.Windows.Controls.Primitives.TextBoxBase or PasswordBox;
+
+    private static bool IsWithin(DependencyObject element, DependencyObject ancestor)
+    {
+        for (var current = element; current != null; current = current is Visual ? VisualTreeHelper.GetParent(current) : LogicalTreeHelper.GetParent(current))
+            if (ReferenceEquals(current, ancestor)) return true;
+        return false;
     }
 
     // ---------------------------------------------------------------------
@@ -398,10 +443,27 @@ internal sealed class ControlInteractor
         {
             if (i < 0 || i >= count)
                 throw new ArgumentOutOfRangeException(nameof(index), $"index {i} is out of range; the control has {count} item(s).");
+            if (SelectCellGridRow(selector, i) is { } cellOutcome) return cellOutcome;
             selector.SelectedIndex = i;
             return new InteractionOutcome(
                 "Selector.SelectedIndex",
-                $"selected index {i}: '{DescribeItem(selector, i)}'");
+                $"selected index {i}: '{DescribeItem(selector, i)}'" + MakeGridRowCurrent(selector, i));
+        }
+
+        // DataGrid rows are matched on their cell texts (the same text wpf_read_grid returns),
+        // including virtualized rows; the data item's ToString() is rarely what the user sees.
+        if (selector is DataGrid grid)
+        {
+            var row = GridReader.FindRow(grid, itemText!, out var rowText);
+            if (row < 0)
+                throw new InvalidOperationException(
+                    $"No row with a cell containing '{itemText}' among {count} row(s). " +
+                    "Read the rows with wpf_read_grid and select by index.");
+            if (SelectCellGridRow(selector, row) is { } cellOutcome) return cellOutcome;
+            selector.SelectedIndex = row;
+            return new InteractionOutcome(
+                "Selector.SelectedIndex",
+                $"selected row {row}: '{rowText}' (matched '{itemText}')" + MakeGridRowCurrent(selector, row));
         }
 
         for (int j = 0; j < count; j++)
@@ -424,6 +486,79 @@ internal sealed class ControlInteractor
     }
 
     /// <summary>
+    /// A grid with SelectionUnit=Cell cannot select rows (WPF throws). Selecting "a row" there means
+    /// what a click into the row does: one cell of it becomes the selected and current cell.
+    /// </summary>
+    private static InteractionOutcome? SelectCellGridRow(Selector selector, int index)
+    {
+        if (selector is not DataGrid { SelectionUnit: DataGridSelectionUnit.Cell } grid) return null;
+        var item = grid.Items[index];
+        if (item == System.Windows.Data.CollectionView.NewItemPlaceholder)
+            throw new InvalidOperationException($"Row {index} is the new-item placeholder and cannot be selected.");
+        var column = grid.CurrentCell.Column is { Visibility: Visibility.Visible } current
+            ? current
+            : grid.Columns.Where(c => c.Visibility == Visibility.Visible).OrderBy(c => c.DisplayIndex).FirstOrDefault()
+              ?? throw new InvalidOperationException("The grid has no visible column to select a cell in.");
+        var wasForeground = PhysicalInputGuard.OwnsForeground();
+        grid.ScrollIntoView(item, column);
+        var cell = new DataGridCellInfo(item, column);
+        grid.SelectedCells.Clear();
+        grid.SelectedCells.Add(cell);
+        grid.CurrentCell = cell;
+        grid.UpdateLayout();
+        var focused = FocusCurrentGridCell(grid);
+        return new InteractionOutcome("DataGrid.SelectedCells",
+            $"cell grid (SelectionUnit=Cell): selected and current cell set to row {index}, column '{ControlOperations.Display(column.Header) ?? "#" + grid.Columns.IndexOf(column)}': '{GridReader.DescribeRow(grid, index)}'"
+            + (focused ? "; it has keyboard focus" : "; keyboard focus could not be moved into it")
+            + (!wasForeground && PhysicalInputGuard.OwnsForeground() ? "; focusing it brought the application to the foreground" : ""));
+    }
+
+    /// <summary>
+    /// A user who selects a grid row also makes it the current row and puts keyboard focus in it,
+    /// which is what row actions (Enter, F2, application key handlers) act on. SelectedIndex alone
+    /// leaves the current cell and focus wherever they were.
+    /// </summary>
+    private static string MakeGridRowCurrent(Selector selector, int index)
+    {
+        if (selector is not DataGrid grid) return string.Empty;
+        var item = grid.Items[index];
+        if (item == System.Windows.Data.CollectionView.NewItemPlaceholder) return string.Empty;
+        try
+        {
+            var column = grid.CurrentCell.Column is { Visibility: Visibility.Visible } current
+                ? current
+                : grid.Columns.Where(c => c.Visibility == Visibility.Visible).OrderBy(c => c.DisplayIndex).FirstOrDefault();
+            if (column == null) return string.Empty;
+            var wasForeground = PhysicalInputGuard.OwnsForeground();
+            grid.ScrollIntoView(item, column);
+            grid.CurrentCell = new DataGridCellInfo(item, column);
+            grid.UpdateLayout();
+            var note = FocusCurrentGridCell(grid)
+                ? "; row is current and has keyboard focus"
+                : "; row is current (keyboard focus could not be moved into it)";
+            // Focusing a cell can activate its window; say so, since it changes what is in front.
+            return !wasForeground && PhysicalInputGuard.OwnsForeground()
+                ? note + "; focusing it brought the application to the foreground" : note;
+        }
+        catch (InvalidOperationException)
+        {
+            // The grid is mid-edit or regenerating containers; the selection itself succeeded.
+            return string.Empty;
+        }
+    }
+
+    /// <summary>Moves focus into the grid's current cell (or its row) when that container is realized.</summary>
+    private static bool FocusCurrentGridCell(DataGrid grid)
+    {
+        var info = grid.CurrentCell;
+        if (info.Item == null || info.Column == null) return false;
+        if (grid.ItemContainerGenerator.ContainerFromItem(info.Item) is not DataGridRow row) return false;
+        var cell = info.Column.GetCellContent(row)?.Parent as DataGridCell
+            ?? ControlOperations.Descendants(row).OfType<DataGridCell>().FirstOrDefault(c => c.Column == info.Column);
+        return cell != null && cell.Focus() || row.Focus();
+    }
+
+    /// <summary>
     /// Human-readable text for the item at <paramref name="index"/> — what the user
     /// sees in the dropdown/list. Tries, in order: container Content, DisplayMemberPath,
     /// an overridden ToString(), the realized item container's visible text (covers
@@ -433,6 +568,9 @@ internal sealed class ControlInteractor
     {
         var item = selector.Items[index];
         if (item == null) return "(null)";
+
+        if (selector is DataGrid grid && item != System.Windows.Data.CollectionView.NewItemPlaceholder)
+            return GridReader.DescribeRow(grid, index);
 
         if (item is ContentControl cc && cc.Content != null)
             return cc.Content.ToString() ?? cc.GetType().Name;
@@ -484,16 +622,78 @@ internal sealed class ControlInteractor
     /// </summary>
     public InteractionOutcome SendKeys(UIElement? element, string keys)
     {
+        PrepareKeys(element, keys);
+        return SendPreparedKeys(keys);
+    }
+
+    /// <summary>
+    /// Validates the combo and focuses the target. Returns whether the application had to be
+    /// brought forward: the caller must confirm it owns the foreground before sending, because
+    /// OS key input always goes to the foreground window, whichever application that is.
+    /// </summary>
+    public bool PrepareKeys(UIElement? element, string keys)
+    {
         if (string.IsNullOrWhiteSpace(keys))
             throw new ArgumentException("Key combo is required (e.g. \"Ctrl+S\", \"Enter\", \"F5\").");
 
         if (element != null)
             EnsureInteractable(element, "given keys");
 
-        var (modifiers, key) = KeyComboParser.Parse(keys);
-
+        KeyComboParser.Parse(keys);
+        var wasForeground = PhysicalInputGuard.OwnsForeground();
         if (element != null)
             FocusForKeyboardInput(element);
+        return !wasForeground;
+    }
+
+    /// <summary>
+    /// Counts how often WPF receives the combo's main key, to tell delivered input from input that
+    /// went elsewhere. Modifiers do not count: a system-wide hotkey such as Alt+P lets Alt through
+    /// and swallows only the P.
+    /// </summary>
+    public sealed class KeyDeliveryProbe
+    {
+        private int _received;
+        private readonly NotifyInputEventHandler _handler;
+
+        internal KeyDeliveryProbe(Key expected)
+        {
+            _handler = (_, e) =>
+            {
+                if (e.StagingItem.Input.RoutedEvent != Keyboard.PreviewKeyDownEvent || e.StagingItem.Input is not KeyEventArgs key) return;
+                var actual = key.Key switch
+                {
+                    Key.System => key.SystemKey,
+                    Key.ImeProcessed => key.ImeProcessedKey,
+                    Key.DeadCharProcessed => key.DeadCharProcessedKey,
+                    _ => key.Key
+                };
+                if (actual == expected) System.Threading.Interlocked.Increment(ref _received);
+            };
+            InputManager.Current.PreNotifyInput += _handler;
+        }
+
+        public int Received => System.Threading.Volatile.Read(ref _received);
+
+        /// <summary>Must run on the thread that created the probe.</summary>
+        public void Stop() => InputManager.Current.PreNotifyInput -= _handler;
+    }
+
+    public KeyDeliveryProbe StartKeyDeliveryProbe(string keys) => new(KeyInterop.KeyFromVirtualKey(KeyComboParser.Parse(keys).Key));
+
+    /// <summary>
+    /// After the window has really become the foreground window, WPF may have restored focus to
+    /// whatever had it before. Puts keyboard focus back inside the target and reports whether it is there.
+    /// </summary>
+    public bool EnsureKeyboardFocusWithin(UIElement element)
+    {
+        if (!element.IsKeyboardFocusWithin) FocusForKeyboardInput(element);
+        return element.IsKeyboardFocusWithin;
+    }
+
+    public InteractionOutcome SendPreparedKeys(string keys)
+    {
+        var (modifiers, key) = KeyComboParser.Parse(keys);
 
         foreach (var modifier in modifiers)
             NativeMethods.KeyDown(modifier);
@@ -524,13 +724,35 @@ internal sealed class ControlInteractor
     /// Brings the host window forward and tries to give keyboard focus to the element.
     /// Returns true when the element actually accepted focus.
     /// </summary>
+    /// <summary>Activates a window for physical input, also when Windows refuses a plain activation.</summary>
+    internal static void BringToForeground(Window? window)
+    {
+        if (window == null) return;
+        window.Activate();
+        if (PhysicalInputGuard.OwnsForeground()) return;
+        PhysicalInputGuard.BringToForeground(new System.Windows.Interop.WindowInteropHelper(window).Handle);
+        if (PhysicalInputGuard.OwnsForeground()) window.Activate();
+    }
+
     private static bool FocusForKeyboardInput(UIElement element)
     {
-        Window.GetWindow(element)?.Activate();
+        BringToForeground(Window.GetWindow(element));
+        // Keys aimed at a grid belong in its current cell: focusing the grid itself would move
+        // focus out of the row and application key handlers would not see a cell as the source.
+        if (element is DataGrid grid && FocusCurrentGridCell(grid)) return true;
         ScrollIntoView(element);
-        var focused = element.Focus();
-        Keyboard.Focus(element);
-        return focused;
+        if (element.Focus())
+        {
+            Keyboard.Focus(element);
+            return true;
+        }
+        // A wrapper that cannot take focus itself (a composite control around a TextBox):
+        // keys belong in the editor inside it, as when a user clicks into the control.
+        if (element.IsKeyboardFocusWithin) return true;
+        var candidates = ControlOperations.Descendants(element).OfType<UIElement>()
+            .Where(e => !ReferenceEquals(e, element) && e.Focusable && e.IsVisible && e.IsEnabled).ToList();
+        var inner = candidates.FirstOrDefault(e => e is System.Windows.Controls.Primitives.TextBoxBase or PasswordBox) ?? candidates.FirstOrDefault();
+        return inner != null && inner.Focus();
     }
 
     // ---------------------------------------------------------------------

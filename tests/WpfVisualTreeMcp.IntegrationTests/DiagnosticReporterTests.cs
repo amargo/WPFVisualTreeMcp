@@ -27,10 +27,43 @@ public class DiagnosticReporterTests
             report.DisabledElements.Should().BeGreaterThan(0);
             report.InvisibleElements.Should().BeGreaterThan(0);
             report.Findings.Should().Contain(f => f.Code == "binding_error" && f.Name == "BrokenText" && f.Property == "Text");
+            report.Findings.First(f => f.Name == "BrokenText").Message.Should().Contain("Path: 'MissingProperty'").And.Contain("source: Object");
             report.Findings.Should().NotContain(f => f.Code == "disabled" || f.Code == "invisible");
             var finding = report.Findings.First(f => f.Name == "BrokenText");
             walker.ResolveHandle(finding.ElementHandle).Should().BeSameAs(broken);
             broken.IsEnabled.Should().BeFalse();
+        });
+    }
+
+    [Fact]
+    public async Task Merges_repeated_binding_trace_errors_and_counts_occurrences()
+    {
+        await OnSta(() =>
+        {
+            var analyzer = new BindingAnalyzer();
+            analyzer.StartCapturingErrors();
+            try
+            {
+                var panel = new StackPanel();
+                for (var i = 0; i < 6; i++)
+                {
+                    // One problem repeated per row, as a grid column with a wrong path would be.
+                    var text = new TextBlock { DataContext = new object() };
+                    text.SetBinding(TextBlock.TextProperty, new Binding(i == 5 ? "OtherMissing" : "MissingProperty"));
+                    panel.Children.Add(text);
+                }
+                panel.Measure(new Size(300, 300));
+                panel.Arrange(new Rect(0, 0, 300, 300));
+
+                var report = DiagnosticReporter.Capture(new[] { panel }, new TreeWalker(), analyzer, null, 500, 25, 100);
+
+                report.CapturedBindingErrorCount.Should().Be(6);
+                report.RecentBindingErrors.Should().HaveCount(2);
+                report.RecentBindingErrors.Should().Contain(e => e.Occurrences == 5 && e.FirstSeen != null && e.Message.Contains("MissingProperty"));
+                report.RecentBindingErrors.Should().Contain(e => e.Occurrences == 1 && e.FirstSeen == null && e.Message.Contains("OtherMissing"));
+                report.Coverage.Should().Contain("not counted as findings");
+            }
+            finally { analyzer.StopCapturingErrors(); }
         });
     }
 

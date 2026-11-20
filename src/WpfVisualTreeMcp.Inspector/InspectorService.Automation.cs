@@ -19,6 +19,15 @@ public partial class InspectorService
         return new ControlOperations(_treeWalker).Execute(element, request);
     }
 
+    private IpcResponse HandleReadGrid(JsonElement data)
+    {
+        var request = IpcSerializer.DeserializeRequestData<ReadGridRequest>(data)!;
+        request.Validate();
+        var element = _treeWalker.ResolveHandle(request.ElementHandle)
+            ?? throw new InvalidOperationException(StaleHandleError(request.ElementHandle));
+        return new ReadGridResponse { RequestId = request.RequestId, Result = GridReader.Read(element, request, _treeWalker) };
+    }
+
     private IpcResponse HandleUnwatchProperty(JsonElement data)
     {
         var request = IpcSerializer.DeserializeRequestData<UnwatchPropertyRequest>(data)!;

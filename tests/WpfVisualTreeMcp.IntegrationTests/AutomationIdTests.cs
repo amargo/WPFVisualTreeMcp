@@ -47,6 +47,98 @@ public class AutomationIdTests
     });
 
     [Fact]
+    public Task Falls_back_to_x_name_like_ui_automation_and_prefers_an_explicit_id() => DiagnosticReporterTests.OnSta(() =>
+    {
+        var root = new StackPanel();
+        var named = new DataGrid { Name = "MainDataGrid" };
+        root.Children.Add(named);
+        root.Children.Add(new TextBox { Name = "maindatagrid" });
+        AutomationIdResolver.Resolve("MainDataGrid", new[] { root }).Should().BeSameAs(named);
+
+        // A second element with only the same name is ambiguous, and the error names the candidates.
+        var hidden = new DataGrid { Name = "MainDataGrid", Visibility = Visibility.Collapsed };
+        root.Children.Add(hidden);
+        var ambiguous = () => AutomationIdResolver.ResolveOrDefault("MainDataGrid", new[] { root }, e => ReferenceEquals(e, hidden) ? "elem_hidden" : "elem_shown");
+        ambiguous.Should().Throw<InvalidOperationException>()
+            .WithMessage("*Ambiguous*2 elements match by x:Name*DataGrid elem_shown (not visible); DataGrid elem_hidden (not visible)*root_handle*");
+
+        // An explicit AutomationId wins over name-only matches.
+        var explicitId = Button("MainDataGrid");
+        root.Children.Add(explicitId);
+        AutomationIdResolver.Resolve("MainDataGrid", new[] { root }).Should().BeSameAs(explicitId);
+
+        // An element with an explicit id is not reachable by its name.
+        var byName = () => AutomationIdResolver.Resolve("DifferentName", new[] { root });
+        byName.Should().Throw<InvalidOperationException>().WithMessage("*not found*x:Name*");
+    });
+
+    [Fact]
+    public Task Names_inside_templates_are_not_ids_and_find_uses_the_same_fallback() => DiagnosticReporterTests.OnSta(() =>
+    {
+        var factory = new FrameworkElementFactory(typeof(TextBlock)) { Name = "Inner" };
+        var list = new ListBox { Name = "Items", ItemsSource = new[] { "a", "b" }, ItemTemplate = new DataTemplate { VisualTree = factory } };
+        var window = new Window { Content = list, Width = 200, Height = 200 }; window.Show(); window.UpdateLayout();
+        try
+        {
+            var walker = new TreeWalker();
+            int Matches(string id) => System.Text.RegularExpressions.Regex.Matches(
+                walker.FindElements(window, new FindCriteria { AutomationId = id }, 100), "\"handle\"").Count;
+
+            Matches("Items").Should().Be(1);
+            Matches("Inner").Should().Be(0, "template-internal names repeat per row");
+            AutomationIdResolver.ResolveOrDefault("Inner", new[] { (DependencyObject)window }).Should().BeNull();
+            AutomationIdResolver.Resolve("Items", new[] { (DependencyObject)window }).Should().BeSameAs(list);
+        }
+        finally { window.Close(); }
+    });
+
+    [Fact]
+    public Task Explains_an_id_that_exists_only_inside_a_closed_menu() => DiagnosticReporterTests.OnSta(() =>
+    {
+        var export = new MenuItem { Header = "Export" };
+        AutomationProperties.SetAutomationId(export, "file.export");
+        var file = new MenuItem { Header = "_File" };
+        file.Items.Add(export);
+        var menu = new Menu();
+        menu.Items.Add(file);
+        var window = new Window { Content = menu, Width = 200, Height = 100 }; window.Show(); window.UpdateLayout();
+        try
+        {
+            var closed = () => AutomationIdResolver.Resolve("file.export", new[] { (DependencyObject)window });
+            closed.Should().Throw<InvalidOperationException>().WithMessage("*not found*MenuItem*closed menu 'File'*Open that menu first*");
+            var absent = () => AutomationIdResolver.Resolve("file.nothing", new[] { (DependencyObject)window });
+            absent.Should().Throw<InvalidOperationException>().WithMessage("*not found*x:Name*");
+        }
+        finally { window.Close(); }
+    });
+
+    [Fact]
+    public Task State_filters_keep_only_on_screen_elements_with_text() => DiagnosticReporterTests.OnSta(() =>
+    {
+        var panel = new StackPanel();
+        for (var i = 0; i < 40; i++) panel.Children.Add(new TextBlock { Text = i % 2 == 0 ? "row " + i : "", Height = 20 });
+        var window = new Window { Content = new ScrollViewer { Content = panel }, Width = 200, Height = 150 };
+        window.Show(); window.UpdateLayout();
+        try
+        {
+            var walker = new TreeWalker();
+            int Count(params string[] filters) => System.Text.RegularExpressions.Regex.Matches(
+                walker.FindElements(window, new FindCriteria
+                {
+                    TypeName = "=TextBlock", VisibleOnly = true,
+                    PropertyFilter = filters.ToDictionary(f => f, _ => "true")
+                }, 1000), "\"handle\"").Count;
+
+            Count().Should().Be(40, "visible_only keeps rows scrolled out of the viewport");
+            var onScreen = Count(WpfVisualTreeMcp.Shared.Ipc.FindFilters.OnScreen);
+            onScreen.Should().BeInRange(1, 10);
+            Count(WpfVisualTreeMcp.Shared.Ipc.FindFilters.HasText).Should().Be(20);
+            Count(WpfVisualTreeMcp.Shared.Ipc.FindFilters.OnScreen, WpfVisualTreeMcp.Shared.Ipc.FindFilters.HasText).Should().BeLessThan(onScreen);
+        }
+        finally { window.Close(); }
+    });
+
+    [Fact]
     public Task Searches_popup_children_and_deduplicates_overlapping_roots() => DiagnosticReporterTests.OnSta(() =>
     {
         var target = Button("popup.save");

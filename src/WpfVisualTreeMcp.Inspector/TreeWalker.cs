@@ -10,6 +10,7 @@ using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Documents;
 using System.Windows.Media;
+using WpfVisualTreeMcp.Shared.Ipc;
 
 namespace WpfVisualTreeMcp.Inspector;
 
@@ -25,7 +26,7 @@ public class FindCriteria
     /// <summary>x:Name, matched as case-insensitive substring.</summary>
     public string? ElementName { get; set; }
 
-    /// <summary>Exact, case-sensitive AutomationProperties.AutomationId match.</summary>
+    /// <summary>Exact, case-sensitive match on AutomationProperties.AutomationId, or x:Name for elements without one.</summary>
     public string? AutomationId { get; set; }
 
     /// <summary>
@@ -495,20 +496,31 @@ public class TreeWalker
         }
     }
 
+    internal static bool IsOrDerivesFrom(Type type, string name)
+    {
+        for (Type? current = type; current != null; current = current.BaseType)
+            if (current.Name.Equals(name, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(current.FullName, name, StringComparison.OrdinalIgnoreCase)) return true;
+        return false;
+    }
+
     private static bool MatchesCriteria(DependencyObject element, FindCriteria criteria)
     {
         var type = element.GetType();
 
         if (criteria.AutomationId != null &&
-            !string.Equals(GetAutomationId(element), criteria.AutomationId, StringComparison.Ordinal))
+            !string.Equals(AutomationIdResolver.EffectiveId(element), criteria.AutomationId, StringComparison.Ordinal))
             return false;
 
         if (!string.IsNullOrEmpty(criteria.TypeName))
         {
             var fullTypeName = type.FullName ?? type.Name;
             // Use IndexOf for .NET Framework 4.8 compatibility (no Contains with StringComparison)
-            var typeMatches = fullTypeName.IndexOf(criteria.TypeName, StringComparison.OrdinalIgnoreCase) >= 0 ||
-                              type.Name.Equals(criteria.TypeName, StringComparison.OrdinalIgnoreCase);
+            // A leading '=' asks for the type itself or a type derived from it instead of a substring.
+            var typeMatches = criteria.TypeName![0] == '='
+                ? IsOrDerivesFrom(type, criteria.TypeName.Substring(1))
+                : fullTypeName.IndexOf(criteria.TypeName, StringComparison.OrdinalIgnoreCase) >= 0 ||
+                  type.Name.Equals(criteria.TypeName, StringComparison.OrdinalIgnoreCase);
             if (!typeMatches) return false;
         }
 
@@ -535,11 +547,43 @@ public class TreeWalker
         {
             foreach (var kvp in criteria.PropertyFilter)
             {
-                if (!PropertyValueMatches(element, kvp.Key, kvp.Value))
-                    return false;
+                // '@' keys are state filters computed here, not CLR properties.
+                var matches = kvp.Key switch
+                {
+                    FindFilters.OnScreen => IsOnScreen(element),
+                    FindFilters.HasText => !string.IsNullOrWhiteSpace(GetSearchableText(element)),
+                    _ => PropertyValueMatches(element, kvp.Key, kvp.Value)
+                };
+                if (!matches) return false;
             }
         }
 
+        return true;
+    }
+
+    /// <summary>
+    /// True when part of the element lies inside every clipping ancestor (scroll viewports,
+    /// ClipToBounds containers and its window). IsVisible alone stays true for items scrolled
+    /// out of view.
+    /// </summary>
+    internal static bool IsOnScreen(DependencyObject element)
+    {
+        if (element is not UIElement ui || !ui.IsVisible || ui.RenderSize.Width <= 0 || ui.RenderSize.Height <= 0)
+            return false;
+        if (PresentationSource.FromVisual(ui) == null) return false;
+        for (var parent = VisualTreeHelper.GetParent(ui); parent != null; parent = VisualTreeHelper.GetParent(parent))
+        {
+            if (parent is not UIElement container) continue;
+            var clips = container is ScrollContentPresenter || container.ClipToBounds || VisualTreeHelper.GetParent(container) == null;
+            if (!clips) continue;
+            try
+            {
+                var bounds = ui.TransformToAncestor(container).TransformBounds(new Rect(ui.RenderSize));
+                bounds.Intersect(new Rect(container.RenderSize));
+                if (bounds.IsEmpty || bounds.Width <= 0 || bounds.Height <= 0) return false;
+            }
+            catch (InvalidOperationException) { return false; }
+        }
         return true;
     }
 
@@ -653,7 +697,7 @@ public class TreeWalker
     /// plus AutomationProperties.Name, ToolTip and Window.Title.
     /// Internal so ControlInteractor can describe item containers the same way.
     /// </summary>
-    internal static string? GetSearchableText(DependencyObject element)
+    internal static string? GetSearchableText(DependencyObject element, bool includeToolTip = true)
     {
         var parts = new List<string>();
 
@@ -676,12 +720,34 @@ public class TreeWalker
         }
         catch { /* attached property not readable on all elements */ }
 
-        if (element is FrameworkElement fe && fe.ToolTip is string tooltip && !string.IsNullOrWhiteSpace(tooltip))
+        if (includeToolTip && element is FrameworkElement fe && fe.ToolTip is string tooltip && !string.IsNullOrWhiteSpace(tooltip))
         {
             parts.Add(tooltip);
         }
 
         return parts.Count == 0 ? null : string.Join(" ", parts.Distinct());
+    }
+
+    /// <summary>
+    /// Every text shown below an element, at any depth, in visual order. For cell templates
+    /// whose text sits deeper than the shallow scan of <see cref="GetSearchableText"/> reaches.
+    /// </summary>
+    internal static string? GetDeepText(DependencyObject element)
+    {
+        var parts = new List<string>();
+        void Collect(DependencyObject parent)
+        {
+            foreach (var child in GetAllVisualChildren(parent))
+            {
+                if (parts.Count >= 20) return;
+                if (child is UIElement { Visibility: not Visibility.Visible }) continue;
+                var text = GetOwnText(child);
+                if (!string.IsNullOrWhiteSpace(text)) parts.Add(text!.Trim());
+                else Collect(child);
+            }
+        }
+        Collect(element);
+        return parts.Count == 0 ? null : string.Join(" ", parts);
     }
 
     private static string? GetHeaderText(DependencyObject element)
@@ -715,6 +781,9 @@ public class TreeWalker
         return element switch
         {
             Window w => w.Title,
+            // Cell text sits too deep for the shallow descendant scan; a row reads as its cells.
+            DataGridRow row => string.Join(" ", ControlOperations.Descendants(row).OfType<DataGridCell>()
+                .Select(ControlOperations.CellText).Where(t => !string.IsNullOrWhiteSpace(t)).Select(t => t!.Trim())),
             // Inline-bound/localized Runs can render text while Text remains empty.
             TextBlock tb => !string.IsNullOrEmpty(tb.Text)
                 ? tb.Text : new TextRange(tb.ContentStart, tb.ContentEnd).Text,

@@ -111,7 +111,9 @@ block, including failures. It shares the interaction gate with drag, touch and o
 mutations, which are rejected while capture is running. Changing application data
 during capture can affect the result.
 
-`max_width`/`max_height` default to 1920/1080. Full-content requests accept up to
+`max_width`/`max_height` default to 1280/800 (1920/1080 up to v0.20.0) so image payloads
+stay small; pass `element_handle` to capture one element at full detail, or raise the
+bounds when small text must be legible. The result text reports the PNG size. Full-content requests accept up to
 16384 per dimension, with a separate 8-megapixel output cap; ordinary screenshots
 retain their 3840/2160 limits. Full-content capture uses bounded render tiles,
 a 64-megapixel retained-image budget, a 32-MiB PNG cap and a cooperative 25-second
@@ -120,6 +122,118 @@ cannot be forcibly interrupted by the Inspector.
 
 ```powershell
 wpfinspect screenshot --pid 1234 --handle elem_42 --full-content --max-height 4000 --out full.png
+```
+
+## Grid data
+
+### wpf_read_grid
+
+Reads rows of a standard WPF `DataGrid` as text, without screenshots or scrolling.
+Values are evaluated from the data items through each column's binding (converters
+and `StringFormat` applied in the grid's language), so virtualized and off-screen
+rows are included. Read-only: selection, scroll position and data are unchanged.
+
+| Parameter | Description |
+|-----------|-------------|
+| `element_handle` / `automation_id` (+ `root_handle`) | The DataGrid, any element inside it, or a container holding exactly one DataGrid |
+| `offset` | First data row to return (default 0) |
+| `limit` | Rows to return, 1-500 (default 50) |
+| `columns` | Optional exact headers or binding paths; default is every visible column in display order |
+| `min_rows`, `contains_text` | Optional wait conditions: at least that many rows, and/or a cell of the returned page containing the text (case-insensitive) |
+| `timeout_ms` | How long to wait for those conditions (default 5000, max 25000). A grid that does not exist yet counts as not ready; the call fails on timeout |
+
+The result contains `gridHandle`, `rowCount`, `offset`, `returned`, `hasMore`,
+`columns` (`index`, `header`, `headerToolTip`, `bindingPath`, `converter`, `sortMemberPath`, `valueSource`), `rows` (`index` plus
+`cells` in column order), `selectedIndices` and `currentRowIndex`. Row indices follow
+the current sorted/filtered items view and match `wpf_select_item` indices; the
+new-item placeholder row is excluded. `wpf_select_item` on a DataGrid matches
+`item_text` against these cell texts (any visible column, case-insensitive substring,
+first matching row), so a row found here can be selected by text or by `index`.
+The selected row is scrolled into view, becomes the current row and receives keyboard
+focus, so `wpf_send_keys` to the grid (for example `Enter`) then acts on that row.
+Selecting is not activating: an application that loads details or opens a record only
+on Enter or double-click has not done so after `wpf_select_item`; send the key or
+double-click afterwards.
+
+`bindingPath` is `.` when a column binds to the whole data item (the text then comes
+from its `converter`); multi-binding child paths are joined with `+`. Find grids with
+`type_name="=DataGrid"`, which also matches DataGrid subclasses.
+
+`valueSource` tells where a column's text comes from: `binding` (the column or
+clipboard binding), `sortMemberPath` (template column read through its sort member)
+or `visual` (template column without any data binding: only rows currently on screen
+have text, others are `null` and a `note` says so). `DataGridComboBoxColumn` returns
+the displayed text when the column itself defines `ItemsSource` (a bound key is looked
+up through `SelectedValuePath` / `DisplayMemberPath`); when the items come from a style
+it returns the bound value, which can be a key. Cells longer than
+2000 characters are truncated. Vendor grids are not supported.
+
+```powershell
+wpfinspect read-grid --pid 1234 --automation-id Orders --offset 100 --limit 50
+wpfinspect read-grid --pid 1234 --handle elem_42 --columns "Id,Quantity"
+```
+
+Each column reports `header` (the caption) and, for element headers with a tooltip,
+`headerToolTip`. `columns` entries are exact headers, binding paths or `#index`
+(the column's `index`, for grids whose headers repeat). A wrong name fails immediately, also when waiting with
+`min_rows` / `contains_text`.
+
+A `ListView` whose view is a `GridView` is read the same way: `DisplayMemberBinding`
+columns from the data items, `CellTemplate` columns (`valueSource: visual`) from rows on
+screen.
+
+Requires the updated Inspector: restart an application that already has an older
+Inspector loaded.
+
+### wpf_edit_grid_cell
+
+Edits the text of one `DataGrid` cell through the grid's own edit cycle: begin edit, set
+the editor text, commit cell and row. Validation and data binding run as for a user
+edit. **Changes application data.**
+
+| Parameter | Description |
+|-----------|-------------|
+| `element_handle` / `automation_id` (+ `root_handle`) | The DataGrid, an element inside it, or a container holding exactly one |
+| `row_index` | Row index as returned by `wpf_read_grid` |
+| `column` | Exact header, binding path or `#index` (position in `Columns`, for repeated headers) |
+| `text` | New cell text |
+
+Returns `changed`, `value` (cell text after the edit), `previous`, `rowIndex`,
+`columnIndex` and `cellHandle`. Only text columns and template columns exposing exactly
+one `TextBox` editor are supported; read-only grids/columns and values rejected by
+validation fail, and the cell is not left in edit mode. A row that is not realized yet
+reports "not ready" without changing anything; retry.
+
+```powershell
+wpfinspect edit-cell --pid 1234 --automation-id Orders --row 3 --column Quantity --text 12
+```
+
+## Native dialogs
+
+### wpf_native_dialog
+
+Lists or answers native Win32 dialogs of the attached application: `MessageBox` prompts
+and other standard dialog windows. They are not WPF elements, so the visual tree and
+`wpf_find_elements` cannot see them. While one is open the application is blocked: the
+click or key that opened it may report a timeout, and other input fails until the dialog
+is answered.
+
+| Parameter | Description |
+|-----------|-------------|
+| `answer` | Caption of the push button to press (exact, case-insensitive, access key ignored). Omit to list |
+| `dialog_handle` | `handle` of the dialog; required only when several are open |
+
+Listing returns `dialogs`, each with `handle`, `title`, `text`, `buttons` (`text`,
+`isEnabled`, `isDefault`), `isForeground` and `ownerTitle`. An empty list means no dialog
+is open. Answering returns `result` and the dialogs still open afterwards. Button captions
+follow the Windows display language ("Yes" is "Igen" on a Hungarian system), so list
+before answering. No keyboard or mouse input is sent and the application may be in the
+background. **Answering changes application state**: the application acts on the choice.
+Task dialogs draw their own message; only their title and buttons are reported.
+
+```powershell
+wpfinspect dialog --pid 1234
+wpfinspect dialog --pid 1234 --answer No
 ```
 
 ## Mouse Interaction
@@ -148,8 +262,11 @@ control's click command; use physical input and verify the intended effect.
 
 Supply exactly one of `element_handle` or `automation_id`. For example,
 `wpf_click_element(automation_id="form.clear")` clicks without a prior handle lookup.
-The ID matches `AutomationProperties.AutomationId` exactly (case-sensitive),
-independently of `x:Name` or the control's text. Resolution includes all open WPF
+The ID matches `AutomationProperties.AutomationId` exactly (case-sensitive). An element
+without an explicit AutomationId is identified by its `x:Name`, as in UI Automation and
+FlaUI `ById`; names inside control/data templates are ignored and an explicit
+AutomationId wins over name-only matches. An ambiguous ID lists the candidates (type,
+handle, window, visibility). Resolution includes all open WPF
 windows and hidden controls; duplicates are errors. Use `root_handle` to restrict
 ID lookup to a window or container, including the root itself. Missing, stale,
 ambiguous or incomplete searches return errors without clicking. Unique lookup
@@ -495,9 +612,12 @@ AutomationId requests fail explicitly until it supports the filter.
 
 | Name | Type | Required | Description |
 |------|------|----------|-------------|
-| `type_name` | string | No | Element type (e.g., "Button", "TextBox") |
+| `type_name` | string | No | Element type, partial match (e.g., "Button", "TextBox"). Prefix with `=` to match only that type and types derived from it: `=DataGrid` finds grids and DataGrid subclasses, not `DataGridCell` or `DataGridColumnHeader` |
 | `element_name` | string | No | x:Name of the element |
-| `automation_id` | string | No | Exact AutomationProperties.AutomationId (case-sensitive, 1–2048 characters, nonblank) |
+| `automation_id` | string | No | Exact AutomationProperties.AutomationId, or x:Name for elements without one (case-sensitive, 1–2048 characters, nonblank) |
+| `on_screen` | boolean | No | Only elements inside every scroll viewport, clipping container and their window. Stricter than `visible_only`, which keeps items scrolled out of view |
+| `has_text` | boolean | No | Only elements that have text |
+| `full_path` | boolean | No | Return each result's complete root-to-element `path`. By default only the nearest ancestors are kept (`… > Parent > Element`) to keep responses small |
 | `root_handle` | string | No | Restrict search to this window or subtree |
 | `property_filter` | object | No | Property name/value pairs to filter by |
 
