@@ -161,6 +161,25 @@ public class ReliabilityRoundTests
     }
 
     [Fact]
+    public async Task NativeDialog_ListsWithoutAnAnswerAndReportsTheResultWithOne()
+    {
+        var bridge = new Moq.Mock<WpfVisualTreeMcp.Automation.Infrastructure.IIpcBridge>();
+        var open = new NativeDialogInfo { Handle = 42, Title = "Confirm", Text = "Delete?", Buttons = { new NativeDialogButton { Id = 6, Text = "Yes", IsEnabled = true } } };
+        bridge.Setup(x => x.NativeDialogAsync(null, null)).ReturnsAsync(new WpfVisualTreeMcp.Shared.Ipc.NativeDialogResponse { Dialogs = { open } });
+        bridge.Setup(x => x.NativeDialogAsync("Yes", 42)).ReturnsAsync(new WpfVisualTreeMcp.Shared.Ipc.NativeDialogResponse { Detail = "pressed 'Yes' on 'Confirm'; the dialog closed" });
+        var tools = new WpfTools(Moq.Mock.Of<WpfVisualTreeMcp.Automation.Infrastructure.IProcessManager>(), bridge.Object);
+
+        var listed = System.Text.Json.JsonSerializer.Serialize(await tools.WpfNativeDialog());
+        listed.Should().Contain("\"Title\":\"Confirm\"").And.Contain("\"Text\":\"Yes\"").And.NotContain("result");
+
+        var answered = System.Text.Json.JsonSerializer.Serialize(await tools.WpfNativeDialog("Yes", 42));
+        answered.Should().Contain("the dialog closed").And.Contain("\"dialogs\":[]");
+
+        var blank = () => tools.WpfNativeDialog(" ");
+        await blank.Should().ThrowAsync<McpException>();
+    }
+
+    [Fact]
     public async Task EditGridCell_ReportsAChangeTheApplicationAppliedAfterTheCommit()
     {
         var bridge = new Moq.Mock<WpfVisualTreeMcp.Automation.Infrastructure.IIpcBridge>();

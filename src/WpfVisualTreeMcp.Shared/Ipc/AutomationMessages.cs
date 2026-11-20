@@ -70,6 +70,21 @@ public sealed class ReadGridResponse : IpcResponse
     public GridReadResult? Result { get; set; }
 }
 
+/// <summary>Lists the native Win32 dialogs of the process, or presses a button of one when <see cref="Button"/> is set.</summary>
+public sealed class NativeDialogRequest : IpcRequest
+{
+    public override string RequestType => "NativeDialog";
+    public string? Button { get; set; }
+    public long? DialogHandle { get; set; }
+}
+
+public sealed class NativeDialogResponse : IpcResponse
+{
+    /// <summary>Open dialogs; after an answer, the dialogs open once the button was pressed.</summary>
+    public List<NativeDialogInfo> Dialogs { get; set; } = new();
+    public string? Detail { get; set; }
+}
+
 public sealed class WindowRequest : IpcRequest
 {
     public override string RequestType => "Window";

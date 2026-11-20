@@ -148,6 +148,17 @@ public class WpfTools
         return await EditGridCellAsync(_ipcBridge, handle, row_index, column, text, message => new McpException(message));
     }
 
+    [McpServerTool]
+    [Description("List or answer native Win32 dialogs of the attached application: MessageBox prompts (Yes/No, OK/Cancel) and other standard dialog windows. They are not WPF elements, so wpf_find_elements and the visual tree cannot see them, and while one is open the application is blocked: a click or key that opened it may report a timeout, and other input tools fail until it is answered. Without answer: returns each open dialog with handle, title, text and buttons (text, isEnabled, isDefault); an empty list means none is open. With answer: presses the push button with that exact caption (case-insensitive, access-key marker ignored; captions follow the Windows display language, so list first) and returns the result plus the dialogs still open. dialog_handle is required only when several dialogs are open. Works when the application is in the background and sends no keyboard or mouse input. STATE-CHANGING when answering: the application acts on the chosen button (e.g. confirms a deletion).")]
+    public async Task<object> WpfNativeDialog(string? answer = null, long? dialog_handle = null)
+    {
+        if (answer != null && string.IsNullOrWhiteSpace(answer)) throw new McpException("answer must be a button caption.");
+        var response = await _ipcBridge.NativeDialogAsync(answer, dialog_handle);
+        return answer == null
+            ? new { dialogs = response.Dialogs }
+            : new { result = response.Detail, dialogs = response.Dialogs };
+    }
+
     internal static async Task<object> EditGridCellAsync(IIpcBridge bridge, string gridHandle, int rowIndex, string column, string text, Func<string, Exception> error)
     {
         // The grid may be given as a container or inner element, and the column by header or binding path.
@@ -752,7 +763,7 @@ public class WpfTools
     }
 
     [McpServerTool]
-    [Description("Set the text/value of a UI element (TextBox, ComboBox, etc.). By default uses UI Automation IValueProvider.SetValue (clean, no focus needed, raises proper events). Falls back to setting TextBox.Text or PasswordBox.Password directly, or a reflected string 'Text' property. Set physical=true to focus the element and type via OS keyboard input (clears existing text with Ctrl+A/Delete first, then types each character; moves window focus). STATE-CHANGING." + InputTargetDescription)]
+    [Description("Set the text/value of a UI element (TextBox, ComboBox, etc.). By default uses UI Automation IValueProvider.SetValue (clean, no focus needed, raises proper events). Falls back to setting TextBox.Text or PasswordBox.Password directly, or a reflected string 'Text' property. Set physical=true to focus the element and type via OS keyboard input (clears existing text with Ctrl+A/Delete first, then types each character; moves window focus; on a composite control it types into the inner text box; nothing is typed unless the application owns the foreground). Focus stays in the field, so a binding that updates on LostFocus (the TextBox default) keeps its old source value until focus leaves: the result says so, send Tab with wpf_send_keys to commit. STATE-CHANGING." + InputTargetDescription)]
     public async Task<object> WpfSetText(string text, string? element_handle = null, bool physical = false,
         string? automation_id = null, string? root_handle = null)
     {

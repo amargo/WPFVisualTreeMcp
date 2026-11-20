@@ -95,6 +95,30 @@ public sealed class GridReadColumn
     public string ValueSource { get; set; } = "binding";
 }
 
+/// <summary>A native Win32 dialog (MessageBox, common dialog) owned by the inspected process.</summary>
+public sealed class NativeDialogInfo
+{
+    /// <summary>Window handle (HWND); identifies the dialog when several are open.</summary>
+    public long Handle { get; set; }
+    public string Title { get; set; } = string.Empty;
+    /// <summary>Message text, one line per text control.</summary>
+    public string Text { get; set; } = string.Empty;
+    public List<NativeDialogButton> Buttons { get; set; } = new();
+    public bool IsForeground { get; set; }
+    public string? OwnerTitle { get; set; }
+    public string? Note { get; set; }
+}
+
+public sealed class NativeDialogButton
+{
+    public long Handle { get; set; }
+    public int Id { get; set; }
+    /// <summary>Caption without the access-key marker.</summary>
+    public string Text { get; set; } = string.Empty;
+    public bool IsEnabled { get; set; }
+    public bool IsDefault { get; set; }
+}
+
 public sealed class GridReadRow
 {
     public int Index { get; set; }

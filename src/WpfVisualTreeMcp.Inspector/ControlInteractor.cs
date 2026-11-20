@@ -9,6 +9,7 @@ using System.Windows.Automation.Peers;
 using System.Windows.Automation.Provider;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
+using System.Windows.Data;
 using System.Windows.Input;
 using System.Windows.Media;
 using WpfVisualTreeMcp.Shared.Models;
@@ -351,8 +352,22 @@ internal sealed class ControlInteractor
             throw new InvalidOperationException(
                 "Neither the element nor anything inside it can take keyboard focus; physical typing has nowhere to land. " +
                 "Use the default UI Automation mode or target the inner text box.");
-        var landed = Keyboard.FocusedElement is DependencyObject focus && !ReferenceEquals(focus, element)
-            ? $" into the inner {focus.GetType().Name}" : "";
+        // A composite control can take focus itself without passing it to its editor (it depends on
+        // where focus was before); typed text then bypasses the editor's bindings. Text belongs in
+        // the editor, so move there unless focus already is in an editor of this element.
+        if (!IsEditor(element) && !(Keyboard.FocusedElement is UIElement current && IsEditor(current) && IsWithin(current, element)))
+            ControlOperations.Descendants(element).OfType<UIElement>()
+                .FirstOrDefault(e => IsEditor(e) && e.Focusable && e.IsVisible && e.IsEnabled)?.Focus();
+        if (!PhysicalInputGuard.OwnsForeground())
+            throw new InvalidOperationException(
+                "The attached application does not own the foreground, so typed text would go to another window; nothing was typed. " +
+                "Bring the application to the front or use the default UI Automation mode.");
+        var focus = Keyboard.FocusedElement as DependencyObject;
+        var landed = focus != null && !ReferenceEquals(focus, element) ? $" into the inner {focus.GetType().Name}" : "";
+        var warning = focus is UIElement target && IsEditor(target) ? ""
+            : $" (keyboard focus is on {focus?.GetType().Name ?? "nothing"}, not a text editor: verify the value and its binding)";
+        if (CommitsOnLostFocus(focus, element))
+            warning += " (the Text binding updates its source on LostFocus and focus is still in the field: the bound value is unchanged until focus leaves, e.g. send Tab)";
 
         // Select-all + delete the existing content first.
         NativeMethods.KeyDown(NativeMethods.VK_CONTROL);
@@ -367,7 +382,35 @@ internal sealed class ControlInteractor
             NativeMethods.SendUnicodeChar(c);
         }
 
-        return new InteractionOutcome("Physical", $"typed {text.Length} char(s){landed} after Ctrl+A/Delete");
+        return new InteractionOutcome("Physical", $"typed {text.Length} char(s){landed} after Ctrl+A/Delete{warning}");
+    }
+
+    /// <summary>True when a Text binding between the focused editor and the targeted element writes its source only on LostFocus.</summary>
+    internal static bool CommitsOnLostFocus(DependencyObject? focus, DependencyObject element)
+    {
+        for (var current = focus; current != null; current = current is Visual ? VisualTreeHelper.GetParent(current) : LogicalTreeHelper.GetParent(current))
+        {
+            var property = System.ComponentModel.DependencyPropertyDescriptor.FromName("Text", current.GetType(), current.GetType())?.DependencyProperty;
+            var binding = property == null ? null : BindingOperations.GetBindingExpression(current, property)?.ParentBinding;
+            if (binding != null && binding.Mode is not (BindingMode.OneWay or BindingMode.OneTime))
+            {
+                var trigger = binding.UpdateSourceTrigger;
+                if (trigger == UpdateSourceTrigger.Default)
+                    trigger = (property!.GetMetadata(current) as FrameworkPropertyMetadata)?.DefaultUpdateSourceTrigger ?? UpdateSourceTrigger.PropertyChanged;
+                if (trigger == UpdateSourceTrigger.LostFocus) return true;
+            }
+            if (ReferenceEquals(current, element)) break;
+        }
+        return false;
+    }
+
+    private static bool IsEditor(UIElement element) => element is System.Windows.Controls.Primitives.TextBoxBase or PasswordBox;
+
+    private static bool IsWithin(DependencyObject element, DependencyObject ancestor)
+    {
+        for (var current = element; current != null; current = current is Visual ? VisualTreeHelper.GetParent(current) : LogicalTreeHelper.GetParent(current))
+            if (ReferenceEquals(current, ancestor)) return true;
+        return false;
     }
 
     // ---------------------------------------------------------------------

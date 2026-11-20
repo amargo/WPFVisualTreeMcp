@@ -25,12 +25,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `wpf_find_elements` filters `on_screen` (inside the scroll viewport and window) and
   `has_text`.
 - `scripts/Deploy-Local.ps1` rebuilds the Release server while it is in use.
+- `wpf_native_dialog` / CLI `dialog`: list and answer native Win32 dialogs (MessageBox) of
+  the attached application, which the visual tree cannot see.
 - `wpf_edit_grid_cell` / CLI `edit-cell`: edit one DataGrid cell through the grid's own
   edit/commit cycle (validation and binding run as for a user edit).
 - `wpf_read_grid` also reads a `ListView` with a `GridView`.
 - `wpf_read_grid` reports a header element's tooltip as `headerToolTip` instead of appending
   it to `header`, reads template cells whose text is nested deeply, and fails at once on a
   wrong column name instead of waiting out `timeout_ms`.
+- Physical `wpf_set_text` always types into the text box inside a composite control, refuses to
+  type when the application does not own the foreground, and reports when the Text binding
+  updates its source on LostFocus (the bound value is unchanged until focus leaves the field).
 - Physical `wpf_set_text` / `wpf_send_keys` on a wrapper that cannot take focus type into
   the editor inside it.
 - A request cancelled because it closed the application reports that instead of

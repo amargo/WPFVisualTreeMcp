@@ -215,6 +215,18 @@ public partial class InspectorService : IDisposable
         {
             DebugLog($"HandleRequestAsync: requestType={requestType}");
 
+            // Native dialogs block the UI thread and usually the request that opened them, which
+            // still holds the interaction gate: answer them without the Dispatcher or the gate.
+            if (requestType == "NativeDialog")
+            {
+                var dialog = IpcSerializer.DeserializeRequestData<NativeDialogRequest>(data)!;
+                return await Task.Run(() =>
+                {
+                    var detail = dialog.Button == null ? null : NativeDialogs.Answer(dialog.DialogHandle, dialog.Button);
+                    return new NativeDialogResponse { Dialogs = NativeDialogs.List(), Detail = detail };
+                }).ConfigureAwait(false);
+            }
+
             if (Application.Current == null)
             {
                 DebugLog("ERROR: Application.Current is NULL!");
@@ -343,7 +355,7 @@ public partial class InspectorService : IDisposable
     {
         return requestType switch
         {
-            "GetCapabilities" => new GetCapabilitiesResponse { CoordinatePointerInput = true, AutomationIdTargeting = true, AutomationIdOptionalResolution = true, AdvancedAutomation = true, PropertySubscriptions = true, GridRead = true, AutomationIdNameFallback = true, FeatureLevel = InspectorFeatures.Level },
+            "GetCapabilities" => new GetCapabilitiesResponse { CoordinatePointerInput = true, AutomationIdTargeting = true, AutomationIdOptionalResolution = true, AdvancedAutomation = true, PropertySubscriptions = true, GridRead = true, NativeDialogs = true, AutomationIdNameFallback = true, FeatureLevel = InspectorFeatures.Level },
             "ResolveAutomationId" => HandleResolveAutomationId(data),
             "Record" => HandleRecord(data),
             "AssertElement" => HandleAssertElement(data),

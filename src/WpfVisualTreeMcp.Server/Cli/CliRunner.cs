@@ -29,7 +29,7 @@ public static class CliRunner
         "styles", "watch-property", "highlight", "click", "move-mouse", "scroll", "drag", "touch", "select-item", "set-text",
         "send-keys", "wait-for", "set-property", "revert-property", "snapshot", "diff",
         "evaluate-binding", "explain-triggers", "layout", "export", "screenshot", "read-grid",
-        "record", "get-recording", "assert", "replay", "export-test", "edit-cell",
+        "record", "get-recording", "assert", "replay", "export-test", "edit-cell", "dialog",
     };
 
     /// <summary>Options that never take a value (presence alone is meaningful).</summary>
@@ -604,6 +604,17 @@ public static class CliRunner
                     break;
                 }
 
+                case "dialog":
+                {
+                    await AttachAsync(processManager, cli, false);
+                    var dialogAnswer = cli.GetStringOrNull("answer");
+                    long? dialogHandle = long.TryParse(cli.GetStringOrNull("dialog"), out var parsedDialog) ? parsedDialog
+                        : cli.GetStringOrNull("dialog") == null ? null : throw new ArgumentException("--dialog must be a dialog handle from 'dialog'.");
+                    var dialogs = await bridge.NativeDialogAsync(dialogAnswer, dialogHandle);
+                    WriteJson(dialogAnswer == null ? new { dialogs = dialogs.Dialogs } : new { result = dialogs.Detail, dialogs = dialogs.Dialogs }, cli);
+                    break;
+                }
+
                 case "edit-cell":
                 {
                     await AttachAsync(processManager, cli, false);
@@ -773,6 +784,7 @@ COMMANDS
   screenshot    --pid [--handle H] [--out FILE] [--max-width N] [--max-height N] [--mode auto|render|screen] [--full-content]
   read-grid     --pid (--handle H | --automation-id ID [--root H]) [--offset N] [--limit N] [--columns 'A,B']   (DataGrid rows as text)
   edit-cell     --pid (--handle H | --automation-id ID [--root H]) --row N --column C --text S   (changes app data)
+  dialog        --pid [--answer BUTTON] [--dialog HANDLE]   (list or answer native MessageBox dialogs)
 
 Element handles (elem_XXXXXXXX) come from 'tree' / 'find' and stay valid while
 the target app keeps running.
@@ -806,6 +818,13 @@ TYPICAL WORKFLOW
                     + "  Dump the visual tree. --root zooms into a subtree; --depth defaults to 25.\n"
                     + "  --outline prints indented text (type, [name], handle per line) instead of\n"
                     + "  JSON; it is less than half the size.",
+            "dialog" => "dialog --pid <id> [--answer <button caption>] [--dialog <handle>]\n"
+                      + "  Without --answer: list the application's open native Win32 dialogs (MessageBox\n"
+                      + "  and other standard dialogs) with title, text and buttons. They are not WPF\n"
+                      + "  elements, so tree/find cannot see them. With --answer: press that push button\n"
+                      + "  (exact caption, case-insensitive; captions follow the Windows language).\n"
+                      + "  --dialog is needed only when several dialogs are open. No keyboard or mouse\n"
+                      + "  input is sent. Answering makes the application act on the choice.",
             "edit-cell" => "edit-cell --pid <id> (--handle H | --automation-id ID [--root H]) --row <n> --column <header or binding path> --text <text>\n"
                          + "  Edit one DataGrid cell: begins the edit, sets the text and commits cell and\n"
                          + "  row, so validation and binding run as for a user edit. --row is the read-grid\n"

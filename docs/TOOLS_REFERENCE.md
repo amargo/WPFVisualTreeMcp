@@ -208,6 +208,34 @@ reports "not ready" without changing anything; retry.
 wpfinspect edit-cell --pid 1234 --automation-id Orders --row 3 --column Quantity --text 12
 ```
 
+## Native dialogs
+
+### wpf_native_dialog
+
+Lists or answers native Win32 dialogs of the attached application: `MessageBox` prompts
+and other standard dialog windows. They are not WPF elements, so the visual tree and
+`wpf_find_elements` cannot see them. While one is open the application is blocked: the
+click or key that opened it may report a timeout, and other input fails until the dialog
+is answered.
+
+| Parameter | Description |
+|-----------|-------------|
+| `answer` | Caption of the push button to press (exact, case-insensitive, access key ignored). Omit to list |
+| `dialog_handle` | `handle` of the dialog; required only when several are open |
+
+Listing returns `dialogs`, each with `handle`, `title`, `text`, `buttons` (`text`,
+`isEnabled`, `isDefault`), `isForeground` and `ownerTitle`. An empty list means no dialog
+is open. Answering returns `result` and the dialogs still open afterwards. Button captions
+follow the Windows display language ("Yes" is "Igen" on a Hungarian system), so list
+before answering. No keyboard or mouse input is sent and the application may be in the
+background. **Answering changes application state**: the application acts on the choice.
+Task dialogs draw their own message; only their title and buttons are reported.
+
+```powershell
+wpfinspect dialog --pid 1234
+wpfinspect dialog --pid 1234 --answer No
+```
+
 ## Mouse Interaction
 
 Every input tool accepts `automation_id` in place of `element_handle`: click,

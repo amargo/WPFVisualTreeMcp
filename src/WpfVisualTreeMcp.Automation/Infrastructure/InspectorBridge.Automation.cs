@@ -35,6 +35,18 @@ public partial class InspectorBridge
         return response;
     }
 
+    public async Task<NativeDialogResponse> NativeDialogAsync(string? button = null, long? dialogHandle = null)
+    {
+        var processId = EnsureConnected().ProcessId;
+        var capabilities = await SendRequestAsync<GetCapabilitiesRequest, GetCapabilitiesResponse>(processId, new());
+        if (!capabilities.Success || !capabilities.NativeDialogs)
+            throw CreateException("Native dialogs require a newer Inspector than the one loaded in the attached app. Restart the app and reattach using the updated server."
+                + (capabilities.Success ? "" : " (" + capabilities.Error + ")"));
+        var response = await SendRequestAsync<NativeDialogRequest, NativeDialogResponse>(processId, new() { Button = button, DialogHandle = dialogHandle });
+        if (!response.Success) throw CreateException(response.Error ?? "Native dialog operation failed.");
+        return response;
+    }
+
     public async Task<WindowResponse> WindowAsync(WindowRequest request)
     {
         await EnsureAdvancedAutomationAsync().ConfigureAwait(false);

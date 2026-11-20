@@ -25,7 +25,7 @@ projects. The x86 injection helper can also use .NET 9 or 10 when .NET 8 is abse
 
 The [`WpfVisualTreeMcp.Automation` C# SDK](https://www.nuget.org/packages/WpfVisualTreeMcp.Automation)
 drives virtualized DataGrids/TreeViews, waits for controls, manages WPF windows and
-streams property changes. The 40-tool MCP server and CLI share the inspection and
+streams property changes. The 41-tool MCP server and CLI share the inspection and
 input engine, including direct AutomationId targeting.
 
 Workflow recording/replay/xUnit export, aggregate diagnostics, full-content screenshots
@@ -731,7 +731,7 @@ WpfVisualTreeMcp/
 ├── src/
 │   ├── WpfVisualTreeMcp.Server/        # MCP Server (.NET 8) - Uses official MCP SDK
 │   │   ├── Program.cs                  # Server initialization with MCP SDK
-│   │   ├── WpfTools.cs                 # 40 inspection, interaction and workflow tools
+│   │   ├── WpfTools.cs                 # 41 inspection, interaction and workflow tools
 │   │   ├── Cli/CliRunner.cs            # One-shot CLI front-end (v0.4.0)
 │   │   └── Services/                   # Process & IPC management
 │   ├── WpfVisualTreeMcp.Inspector/     # Injected DLL (Framework 4.7.2/4.8/4.8.1; .NET 8/9/10)
@@ -755,7 +755,7 @@ WpfVisualTreeMcp/
 - **Protocol**: JSON-RPC 2.0 over stdio transport
 - **Target Framework**: .NET 8.0 (Server) / .NET Framework 4.7.2, 4.8 and .NET 8.0-windows (Inspector)
 - **IPC**: Named Pipes for server-to-application communication
-- **Tools**: 40 tools auto-discovered via `[McpServerTool]` attributes, covering inspection, diagnostics, interaction and workflow recording/testing. Replay performs recorded actions; full-content screenshots may temporarily scroll controls.
+- **Tools**: 41 tools auto-discovered via `[McpServerTool]` attributes, covering inspection, diagnostics, interaction and workflow recording/testing. Replay performs recorded actions; full-content screenshots may temporarily scroll controls.
 - **CLI**: same executable runs as one-shot CLI when given a subcommand (`Program.cs` routes via `CliRunner.IsCliCommand`)
 
 ## Acknowledgments

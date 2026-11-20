@@ -327,6 +327,34 @@ public class GridReaderTests
     });
 
     [Fact]
+    public Task Physical_set_text_moves_focus_from_a_focusable_wrapper_to_its_editor() => DiagnosticReporterTests.OnSta(() =>
+    {
+        var box = new TextBox();
+        var wrapper = new ContentControl { Focusable = true, Content = new Border { Child = box } };
+        var window = new Window { Content = wrapper, Width = 300, Height = 200 }; window.Show(); window.UpdateLayout();
+        try
+        {
+            // Without the foreground nothing is typed; the focus decision is made before that check either way.
+            try { new ControlInteractor().SetText(wrapper, string.Empty, physical: true).Detail.Should().Contain("into the inner TextBox").And.NotContain("verify"); }
+            catch (InvalidOperationException e) { e.Message.Should().Contain("does not own the foreground"); }
+            box.IsKeyboardFocused.Should().BeTrue();
+        }
+        finally { window.Close(); }
+    });
+
+    [Fact]
+    public Task Lost_focus_text_bindings_are_recognised_so_set_text_can_say_the_source_is_not_updated_yet() => DiagnosticReporterTests.OnSta(() =>
+    {
+        var lazy = new TextBox { DataContext = new Row { Name = "a" } };
+        lazy.SetBinding(TextBox.TextProperty, new Binding("Name"));
+        var eager = new TextBox { DataContext = new Row { Name = "a" } };
+        eager.SetBinding(TextBox.TextProperty, new Binding("Name") { UpdateSourceTrigger = UpdateSourceTrigger.PropertyChanged });
+        ControlInteractor.CommitsOnLostFocus(lazy, lazy).Should().BeTrue();
+        ControlInteractor.CommitsOnLostFocus(eager, eager).Should().BeFalse();
+        ControlInteractor.CommitsOnLostFocus(new TextBox(), new TextBox()).Should().BeFalse();
+    });
+
+    [Fact]
     public Task Repeated_headers_are_selected_by_index_name_and_the_error_says_so() => DiagnosticReporterTests.OnSta(() =>
     {
         var grid = CreateGrid(3);

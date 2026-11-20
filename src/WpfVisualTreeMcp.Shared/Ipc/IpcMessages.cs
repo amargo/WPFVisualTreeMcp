@@ -26,7 +26,7 @@ public abstract class IpcResponse
 /// </summary>
 public static class InspectorFeatures
 {
-    public const int Level = 8;
+    public const int Level = 9;
 
     /// <summary>Guidance when the loaded Inspector and this server were built at different levels; null when they match.</summary>
     public static string? CompatibilityNote(int inspectorLevel, int serverLevel = Level)
@@ -64,6 +64,8 @@ public class GetCapabilitiesResponse : IpcResponse
     public bool AdvancedAutomation { get; set; }
     public bool PropertySubscriptions { get; set; }
     public bool GridRead { get; set; }
+    /// <summary>Native Win32 dialogs (MessageBox) can be listed and answered.</summary>
+    public bool NativeDialogs { get; set; }
     /// <summary>automation_id also matches x:Name for elements without an explicit AutomationId.</summary>
     public bool AutomationIdNameFallback { get; set; }
     /// <summary><see cref="InspectorFeatures.Level"/> of the loaded Inspector; 0 for builds that predate it.</summary>
