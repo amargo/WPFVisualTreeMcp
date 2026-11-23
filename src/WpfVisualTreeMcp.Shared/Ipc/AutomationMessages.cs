@@ -76,6 +76,12 @@ public sealed class NativeDialogRequest : IpcRequest
     public override string RequestType => "NativeDialog";
     public string? Button { get; set; }
     public long? DialogHandle { get; set; }
+
+    /// <summary>Text written into an edit field before any button is pressed.</summary>
+    public string? FieldText { get; set; }
+
+    /// <summary>The field: its label (case-insensitive substring) or control id; optional when the dialog has one field.</summary>
+    public string? Field { get; set; }
 }
 
 public sealed class NativeDialogResponse : IpcResponse

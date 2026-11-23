@@ -104,9 +104,21 @@ public sealed class NativeDialogInfo
     /// <summary>Message text, one line per text control.</summary>
     public string Text { get; set; } = string.Empty;
     public List<NativeDialogButton> Buttons { get; set; } = new();
+    /// <summary>Editable text fields (file name of a Save As dialog, an input box).</summary>
+    public List<NativeDialogField> Fields { get; set; } = new();
     public bool IsForeground { get; set; }
     public string? OwnerTitle { get; set; }
     public string? Note { get; set; }
+}
+
+public sealed class NativeDialogField
+{
+    public long Handle { get; set; }
+    public int Id { get; set; }
+    /// <summary>The label shown next to the field, without the access-key marker; empty when it has none.</summary>
+    public string Label { get; set; } = string.Empty;
+    public string Text { get; set; } = string.Empty;
+    public bool IsEnabled { get; set; }
 }
 
 public sealed class NativeDialogButton

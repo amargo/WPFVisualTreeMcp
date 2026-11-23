@@ -11,7 +11,7 @@ public interface IIpcBridge
     Task<ControlOperationResponse> ControlOperationAsync(ControlOperationRequest request);
     Task<WindowResponse> WindowAsync(WindowRequest request);
     /// <summary>Lists native Win32 dialogs of the attached process; with <paramref name="button"/>, presses that button first.</summary>
-    Task<NativeDialogResponse> NativeDialogAsync(string? button = null, long? dialogHandle = null);
+    Task<NativeDialogResponse> NativeDialogAsync(string? button = null, long? dialogHandle = null, string? fieldText = null, string? field = null);
     Task<PropertySubscription> ObservePropertyAsync(string elementHandle, string propertyName);
     Task UnwatchPropertyAsync(string watchId);
     Task<RecordingState> RecordAsync(string action, string? name = null);

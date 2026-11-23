@@ -26,7 +26,7 @@ public abstract class IpcResponse
 /// </summary>
 public static class InspectorFeatures
 {
-    public const int Level = 10;
+    public const int Level = 11;
 
     /// <summary>Guidance when the loaded Inspector and this server were built at different levels; null when they match.</summary>
     public static string? CompatibilityNote(int inspectorLevel, int serverLevel = Level)

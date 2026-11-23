@@ -161,11 +161,13 @@ public class WpfTools
     }
 
     [McpServerTool]
-    [Description("List or answer native Win32 dialogs of the attached application: MessageBox prompts (Yes/No, OK/Cancel) and other standard dialog windows. They are not WPF elements, so wpf_find_elements and the visual tree cannot see them, and while one is open the application is blocked: a click or key that opened it may report a timeout, and other input tools fail until it is answered. Without answer: returns each open dialog with handle, title, text and buttons (text, isEnabled, isDefault); an empty list means none is open. With answer: presses the push button with that exact caption (case-insensitive, access-key marker ignored; captions follow the Windows display language, so list first) and returns the result plus the dialogs still open. dialog_handle is required only when several dialogs are open. wait_ms (0-25000, default 0): a dialog opened by an asynchronous operation (an error after a server call, a confirmation after a save) appears only later, so an immediate listing can be empty. With wait_ms, a listing waits until a dialog is open, and an answer waits for a follow-up dialog (a different one); both return as soon as one appears, otherwise after wait_ms with what is open. Works when the application is in the background and sends no keyboard or mouse input. STATE-CHANGING when answering: the application acts on the chosen button (e.g. confirms a deletion).")]
-    public async Task<object> WpfNativeDialog(string? answer = null, long? dialog_handle = null, int wait_ms = 0)
+    [Description("List or answer native Win32 dialogs of the attached application: MessageBox prompts (Yes/No, OK/Cancel) and other standard dialog windows. They are not WPF elements, so wpf_find_elements and the visual tree cannot see them, and while one is open the application is blocked: a click or key that opened it may report a timeout, and other input tools fail until it is answered. Without answer: returns each open dialog with handle, title, text and buttons (text, isEnabled, isDefault); an empty list means none is open. With answer: presses the push button with that exact caption (case-insensitive, access-key marker ignored; captions follow the Windows display language, so list first) and returns the result plus the dialogs still open. dialog_handle is required only when several dialogs are open. wait_ms (0-25000, default 0): a dialog opened by an asynchronous operation (an error after a server call, a confirmation after a save) appears only later, so an immediate listing can be empty. With wait_ms, a listing waits until a dialog is open, and an answer waits for a follow-up dialog (a different one); both return as soon as one appears, otherwise after wait_ms with what is open. Each dialog also lists its editable fields (id, label, text), e.g. the file name of a Save As or Open dialog: text writes into a field (field = its label substring or id, optional when there is one) before answer is pressed, so text='C:\\exports\\list.xlsx' with answer='Save' saves under that name in one call. Works when the application is in the background and sends no keyboard or mouse input. STATE-CHANGING when answering: the application acts on the chosen button (e.g. confirms a deletion).")]
+    public async Task<object> WpfNativeDialog(string? answer = null, long? dialog_handle = null, int wait_ms = 0,
+        string? text = null, string? field = null)
     {
         if (answer != null && string.IsNullOrWhiteSpace(answer)) throw new McpException("answer must be a button caption.");
-        return await NativeDialogAsync(_ipcBridge, answer, dialog_handle, wait_ms);
+        if (field != null && text == null) throw new McpException("field selects where text is written; pass text as well.");
+        return await NativeDialogAsync(_ipcBridge, answer, dialog_handle, wait_ms, text, field);
     }
 
     /// <summary>
@@ -173,14 +175,15 @@ public class WpfTools
     /// (listing) or a dialog other than the answered one is open (answer), since dialogs shown after
     /// asynchronous work appear only later.
     /// </summary>
-    internal static async Task<object> NativeDialogAsync(IIpcBridge bridge, string? answer, long? dialogHandle, int waitMs, int pollMs = 200)
+    internal static async Task<object> NativeDialogAsync(IIpcBridge bridge, string? answer, long? dialogHandle, int waitMs,
+        string? text = null, string? field = null, int pollMs = 200)
     {
         waitMs = Math.Clamp(waitMs, 0, 25000);
         // A follow-up dialog is one that was not open before the answer.
         var before = answer != null && waitMs > 0
             ? (await bridge.NativeDialogAsync()).Dialogs.Select(d => d.Handle).ToHashSet()
             : new HashSet<long>();
-        var response = await bridge.NativeDialogAsync(answer, dialogHandle);
+        var response = await bridge.NativeDialogAsync(answer, dialogHandle, text, field);
         var dialogs = response.Dialogs;
         bool Ready() => answer == null ? dialogs.Count > 0 : dialogs.Any(d => !before.Contains(d.Handle));
         var clock = System.Diagnostics.Stopwatch.StartNew();
@@ -190,7 +193,7 @@ public class WpfTools
             dialogs = (await bridge.NativeDialogAsync()).Dialogs;
         }
         object? waited = waitMs > 0 ? clock.ElapsedMilliseconds : null;
-        return answer == null
+        return answer == null && text == null
             ? new { dialogs, waited_ms = waited }
             : new { result = response.Detail, dialogs, waited_ms = waited };
     }

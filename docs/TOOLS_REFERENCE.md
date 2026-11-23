@@ -278,6 +278,8 @@ is answered.
 | `answer` | Caption of the push button to press (exact, case-insensitive, access key ignored). Omit to list |
 | `dialog_handle` | `handle` of the dialog; required only when several are open |
 | `wait_ms` | 0-25000 (default 0). Listing waits until a dialog is open; answering waits for a follow-up dialog |
+| `text` | Written into an edit field (WM_SETTEXT) before `answer` is pressed, e.g. the file name of a Save As dialog |
+| `field` | The field for `text`: label substring or control id from the listing; optional when the dialog has one field |
 
 Listing returns `dialogs`, each with `handle`, `title`, `text`, `buttons` (`text`,
 `isEnabled`, `isDefault`), `isForeground` and `ownerTitle`. An empty list means no dialog
@@ -297,6 +299,7 @@ reports `waited_ms`.
 wpfinspect dialog --pid 1234
 wpfinspect dialog --pid 1234 --answer No
 wpfinspect dialog --pid 1234 --answer OK --wait 5000
+wpfinspect dialog --pid 1234 --text "C:\exports\list.xlsx" --answer Save
 ```
 
 ## Mouse Interaction

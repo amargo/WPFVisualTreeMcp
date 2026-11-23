@@ -167,7 +167,9 @@ Target WPF Application (.NET Framework)
 - `wpf_native_dialog` / CLI `dialog` (`NativeDialogs.cs`) list and answer Win32 `#32770` windows of
   the process (MessageBox). Pure Win32, handled at the top of `HandleRequestAsync` before the
   Dispatcher and the interaction gate: the request that opened the dialog is still blocked inside
-  it and holds the gate. Buttons are pressed with a posted `WM_COMMAND`, never with input.
+  it and holds the gate. Buttons are pressed with a posted `WM_COMMAND`, never with input. Editable `Edit`
+  fields are listed with the nearest preceding `Static` as label and filled with `WM_SETTEXT` before the
+  button is pressed (`NativeDialogFieldTests` drives a real in-process SaveFileDialog).
 
 ### Keyboard input
 - `SendKeys` runs through `HandleSendKeysAsync`: prepare/focus on the Dispatcher, wait off the

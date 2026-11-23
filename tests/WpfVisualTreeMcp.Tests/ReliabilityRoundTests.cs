@@ -80,7 +80,7 @@ public class ReliabilityRoundTests
         NativeDialogInfo Box(long handle, string title) => new() { Handle = handle, Title = title, Buttons = { new NativeDialogButton { Text = "OK", IsEnabled = true } } };
         var bridge = new Mock<WpfVisualTreeMcp.Automation.Infrastructure.IIpcBridge>();
         var lists = new Queue<List<NativeDialogInfo>>(new[] { new List<NativeDialogInfo>(), new List<NativeDialogInfo>(), new List<NativeDialogInfo> { Box(7, "Error") } });
-        bridge.Setup(x => x.NativeDialogAsync(null, null)).ReturnsAsync(() => new NativeDialogResponse { Dialogs = lists.Count > 1 ? lists.Dequeue() : lists.Peek() });
+        bridge.Setup(x => x.NativeDialogAsync(null, null, null, null)).ReturnsAsync(() => new NativeDialogResponse { Dialogs = lists.Count > 1 ? lists.Dequeue() : lists.Peek() });
 
         var listed = System.Text.Json.JsonSerializer.Serialize(await WpfTools.NativeDialogAsync(bridge.Object, null, null, 5000, pollMs: 1));
         listed.Should().Contain("\"Title\":\"Error\"").And.Contain("waited_ms");
@@ -88,14 +88,14 @@ public class ReliabilityRoundTests
         // After an answer, the answered dialog itself is not a follow-up; a new one is.
         var follow = new Queue<List<NativeDialogInfo>>(new[] { new List<NativeDialogInfo> { Box(1, "Save?") }, new List<NativeDialogInfo>(), new List<NativeDialogInfo> { Box(2, "Error") } });
         var answering = new Mock<WpfVisualTreeMcp.Automation.Infrastructure.IIpcBridge>();
-        answering.Setup(x => x.NativeDialogAsync(null, null)).ReturnsAsync(() => new NativeDialogResponse { Dialogs = follow.Count > 1 ? follow.Dequeue() : follow.Peek() });
-        answering.Setup(x => x.NativeDialogAsync("OK", null)).ReturnsAsync(new NativeDialogResponse { Detail = "pressed 'OK' on 'Save?'; the dialog closed", Dialogs = { Box(1, "Save?") } });
+        answering.Setup(x => x.NativeDialogAsync(null, null, null, null)).ReturnsAsync(() => new NativeDialogResponse { Dialogs = follow.Count > 1 ? follow.Dequeue() : follow.Peek() });
+        answering.Setup(x => x.NativeDialogAsync("OK", null, null, null)).ReturnsAsync(new NativeDialogResponse { Detail = "pressed 'OK' on 'Save?'; the dialog closed", Dialogs = { Box(1, "Save?") } });
         var answered = System.Text.Json.JsonSerializer.Serialize(await WpfTools.NativeDialogAsync(answering.Object, "OK", null, 5000, pollMs: 1));
         answered.Should().Contain("\"Title\":\"Error\"").And.Contain("the dialog closed");
 
         // Nothing appears: returns after the wait with an empty list instead of failing.
         var none = new Mock<WpfVisualTreeMcp.Automation.Infrastructure.IIpcBridge>();
-        none.Setup(x => x.NativeDialogAsync(null, null)).ReturnsAsync(new NativeDialogResponse());
+        none.Setup(x => x.NativeDialogAsync(null, null, null, null)).ReturnsAsync(new NativeDialogResponse());
         System.Text.Json.JsonSerializer.Serialize(await WpfTools.NativeDialogAsync(none.Object, null, null, 50, pollMs: 1)).Should().Contain("\"dialogs\":[]");
     }
 
@@ -281,8 +281,8 @@ public class ReliabilityRoundTests
     {
         var bridge = new Moq.Mock<WpfVisualTreeMcp.Automation.Infrastructure.IIpcBridge>();
         var open = new NativeDialogInfo { Handle = 42, Title = "Confirm", Text = "Delete?", Buttons = { new NativeDialogButton { Id = 6, Text = "Yes", IsEnabled = true } } };
-        bridge.Setup(x => x.NativeDialogAsync(null, null)).ReturnsAsync(new WpfVisualTreeMcp.Shared.Ipc.NativeDialogResponse { Dialogs = { open } });
-        bridge.Setup(x => x.NativeDialogAsync("Yes", 42)).ReturnsAsync(new WpfVisualTreeMcp.Shared.Ipc.NativeDialogResponse { Detail = "pressed 'Yes' on 'Confirm'; the dialog closed" });
+        bridge.Setup(x => x.NativeDialogAsync(null, null, null, null)).ReturnsAsync(new WpfVisualTreeMcp.Shared.Ipc.NativeDialogResponse { Dialogs = { open } });
+        bridge.Setup(x => x.NativeDialogAsync("Yes", 42, null, null)).ReturnsAsync(new WpfVisualTreeMcp.Shared.Ipc.NativeDialogResponse { Detail = "pressed 'Yes' on 'Confirm'; the dialog closed" });
         var tools = new WpfTools(Moq.Mock.Of<WpfVisualTreeMcp.Automation.Infrastructure.IProcessManager>(), bridge.Object);
 
         var listed = System.Text.Json.JsonSerializer.Serialize(await tools.WpfNativeDialog());

@@ -222,8 +222,10 @@ public partial class InspectorService : IDisposable
                 var dialog = IpcSerializer.DeserializeRequestData<NativeDialogRequest>(data)!;
                 return await Task.Run(() =>
                 {
-                    var detail = dialog.Button == null ? null : NativeDialogs.Answer(dialog.DialogHandle, dialog.Button);
-                    return new NativeDialogResponse { Dialogs = NativeDialogs.List(), Detail = detail };
+                    var details = new List<string>();
+                    if (dialog.FieldText != null) details.Add(NativeDialogs.SetField(dialog.DialogHandle, dialog.Field, dialog.FieldText));
+                    if (dialog.Button != null) details.Add(NativeDialogs.Answer(dialog.DialogHandle, dialog.Button));
+                    return new NativeDialogResponse { Dialogs = NativeDialogs.List(), Detail = details.Count == 0 ? null : string.Join("; ", details) };
                 }).ConfigureAwait(false);
             }
 

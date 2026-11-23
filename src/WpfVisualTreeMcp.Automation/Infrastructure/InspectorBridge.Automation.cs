@@ -35,14 +35,18 @@ public partial class InspectorBridge
         return response;
     }
 
-    public async Task<NativeDialogResponse> NativeDialogAsync(string? button = null, long? dialogHandle = null)
+    public async Task<NativeDialogResponse> NativeDialogAsync(string? button = null, long? dialogHandle = null, string? fieldText = null, string? field = null)
     {
         var processId = EnsureConnected().ProcessId;
         var capabilities = await SendRequestAsync<GetCapabilitiesRequest, GetCapabilitiesResponse>(processId, new());
         if (!capabilities.Success || !capabilities.NativeDialogs)
             throw CreateException("Native dialogs require a newer Inspector than the one loaded in the attached app. Restart the app and reattach using the updated server."
                 + (capabilities.Success ? "" : " (" + capabilities.Error + ")"));
-        var response = await SendRequestAsync<NativeDialogRequest, NativeDialogResponse>(processId, new() { Button = button, DialogHandle = dialogHandle });
+        // An older Inspector would ignore the text and press the button anyway.
+        if (fieldText != null && capabilities.FeatureLevel < 11)
+            throw CreateException("Writing a dialog field needs a newer Inspector than the one loaded in the attached app. Restart the app and reattach.");
+        var response = await SendRequestAsync<NativeDialogRequest, NativeDialogResponse>(processId,
+            new() { Button = button, DialogHandle = dialogHandle, FieldText = fieldText, Field = field });
         if (!response.Success) throw CreateException(response.Error ?? "Native dialog operation failed.");
         return response;
     }
