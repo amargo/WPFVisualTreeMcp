@@ -261,6 +261,9 @@ public partial class InspectorService : IDisposable
             var captureToken = captureTimeout?.Token ?? CancellationToken.None;
 
             var result = await ExecuteOperationAsync(requestType, data, captureToken).ConfigureAwait(false);
+            if (result is SetTextResponse { Success: true } written
+                && IpcSerializer.DeserializeRequestData<SetTextRequest>(data) is { Commit: true } commit)
+                written.Detail = await CommitTextAsync(commit, written.Detail).ConfigureAwait(false);
             if (ownsInteraction && result.Success && requestType != "Window")
                 await OnDispatcher(() => true, _inputShutdown.Token, System.Windows.Threading.DispatcherPriority.Background);
             if (recordedStep != null && result.Success && (result is not WaitForElementResponse wait || wait.Matched)
@@ -287,6 +290,27 @@ public partial class InspectorService : IDisposable
         finally
         {
             if (ownsInteraction) _interactionGate.Release();
+        }
+    }
+
+    /// <summary>
+    /// Commits set_text off the Dispatcher's request: typed keys are processed only after the request
+    /// returns, so the commit waits (up to 3 s) until the field shows the typed text.
+    /// </summary>
+    private async Task<string?> CommitTextAsync(SetTextRequest request, string? detail)
+    {
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        while (true)
+        {
+            var force = clock.ElapsedMilliseconds >= 3000;
+            var committed = await OnDispatcher(() =>
+            {
+                var element = _treeWalker.ResolveHandle(request.ElementHandle) as UIElement
+                    ?? throw new InvalidOperationException(StaleHandleError(request.ElementHandle));
+                return ControlInteractor.CommitText(element, request.Text ?? string.Empty, request.Physical, force);
+            }, _inputShutdown.Token, System.Windows.Threading.DispatcherPriority.Background).ConfigureAwait(false);
+            if (committed != null) return (detail ?? string.Empty).Replace(ControlInteractor.LostFocusWarning, string.Empty) + "; " + committed;
+            await Task.Delay(50, _inputShutdown.Token).ConfigureAwait(false);
         }
     }
 

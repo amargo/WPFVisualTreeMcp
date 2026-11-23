@@ -187,7 +187,7 @@ public interface IIpcBridge
     /// with TextBox/PasswordBox/reflected fallbacks. When <paramref name="physical"/>
     /// is true, focuses the element and types via OS keyboard input.
     /// </summary>
-    Task<SetTextResult> SetTextAsync(string elementHandle, string text, bool physical);
+    Task<SetTextResult> SetTextAsync(string elementHandle, string text, bool physical, bool commit = false);
 
     /// <summary>
     /// Sends a keyboard shortcut or key combination (e.g. "Ctrl+S", "Enter", "F5") to

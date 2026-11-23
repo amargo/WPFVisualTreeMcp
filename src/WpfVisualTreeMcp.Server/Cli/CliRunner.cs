@@ -35,7 +35,7 @@ public static class CliRunner
     /// <summary>Options that never take a value (presence alone is meaningful).</summary>
     private static readonly HashSet<string> KnownFlags = new(StringComparer.OrdinalIgnoreCase)
     {
-        "auto-inject", "no-inject", "compact", "outline", "short-path", "on-screen", "has-text", "verbose", "physical", "horizontal", "visible-only", "full-content", "all", "help", "h", "check", "status",
+        "auto-inject", "no-inject", "commit", "compact", "outline", "short-path", "on-screen", "has-text", "verbose", "physical", "horizontal", "visible-only", "full-content", "all", "help", "h", "check", "status",
     };
 
     private static string Exe =>
@@ -425,7 +425,8 @@ public static class CliRunner
                     var result = await bridge.SetTextAsync(
                         await ResolveInputTargetAsync(bridge, cli),
                         cli.GetRequired("text"),
-                        cli.Flags.Contains("physical"));
+                        cli.Flags.Contains("physical"),
+                        cli.Flags.Contains("commit"));
                     WriteJson(new
                     {
                         success = true,
@@ -786,7 +787,7 @@ COMMANDS
   drag          --pid (--handle H | --automation-id ID [--root H]) (--target H | --target-automation-id ID [--target-root H] | --delta-x X / --delta-y Y) [--duration MS] [--button left|right|middle]
   touch         --pid (--handle H | --automation-id ID [--root H]) --gesture tap|long_press|swipe|pinch|rotate [--delta-x X] [--scale N] [--angle N]
   select-item   --pid (--handle H | --automation-id ID [--root H]) (--item-text S | --index N)  (changes app state)
-  set-text      --pid (--handle H | --automation-id ID [--root H]) --text 'value' [--physical]  (changes app state)
+  set-text      --pid (--handle H | --automation-id ID [--root H]) --text 'value' [--physical] [--commit]  (changes app state)
   send-keys     --pid --keys 'Ctrl+S' [--handle H | --automation-id ID [--root H]]            (changes app state)
   wait-for      --pid (--type T | --name N | --text S | --automation-id ID) [--condition visible|exists|enabled|hidden] [--timeout MS] [--poll MS]
   set-property  --pid (--handle H | --automation-id ID [--root H]) --property P --value V                    (changes app state, reversible)
@@ -955,13 +956,16 @@ TYPICAL WORKFLOW
                            + "  virtualized items and raises proper selection events — prefer this\n"
                            + "  over clicking dropdown items. On failure the error lists available\n"
                            + "  items. This command CHANGES application state.",
-            "set-text" => "set-text --pid <id> (--handle H | --automation-id ID [--root H]) --text <value> [--physical]\n"
+            "set-text" => "set-text --pid <id> (--handle H | --automation-id ID [--root H]) --text <value> [--physical] [--commit]\n"
                         + "  Replace the text/value of an element (TextBox, ComboBox, ...).\n"
                         + "  Default: UI Automation IValueProvider.SetValue, with a\n"
                         + "  TextBox.Text / PasswordBox.Password / reflected-Text fallback.\n"
                         + "  --physical: focus the element and type via OS keyboard input\n"
                         + "  (clears existing text with Ctrl+A/Delete first, then types each\n"
-                        + "  character). This command CHANGES application state.",
+                        + "  character).\n"
+                        + "  --commit: then leave the field as Tab would and write pending bindings,\n"
+                        + "  reporting the bound source values and validation errors (needed for\n"
+                        + "  bindings that update on LostFocus, the TextBox default). This command CHANGES application state.",
             "send-keys" => "send-keys --pid <id> --keys <combo> [--handle H | --automation-id ID [--root H]]\n"
                          + "  Send a keyboard shortcut to an element, or to whatever has focus\n"
                          + "  when both --handle and --automation-id are omitted. Modifiers: Ctrl, Shift, Alt, Win.\n"

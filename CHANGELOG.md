@@ -30,6 +30,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `wpf_launch` / CLI `launch`: start an application by its `.exe` path, wait for its first
   window and attach. Only local WPF applications (referencing PresentationFramework) outside the
   Windows directory; network paths, shells and script hosts are refused.
+- `wpf_set_text` `commit` / CLI `set-text --commit`: after writing, leave the field as Tab would,
+  write bindings still holding the value (LostFocus is the TextBox default, so the view model
+  otherwise keeps the old value) and report the bound source values and validation errors.
+  Physical typing is committed once the typed text has arrived. Inspector feature level 10.
 - `wpf_window` / CLI `window`: list top-level WPF windows, wait for one to appear or close,
   and activate, minimize, maximize, restore or close one.
 - `wpf_native_dialog` / CLI `dialog`: list and answer native Win32 dialogs (MessageBox) of

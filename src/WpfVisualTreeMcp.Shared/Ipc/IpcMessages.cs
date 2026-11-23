@@ -26,7 +26,7 @@ public abstract class IpcResponse
 /// </summary>
 public static class InspectorFeatures
 {
-    public const int Level = 9;
+    public const int Level = 10;
 
     /// <summary>Guidance when the loaded Inspector and this server were built at different levels; null when they match.</summary>
     public static string? CompatibilityNote(int inspectorLevel, int serverLevel = Level)
@@ -518,6 +518,9 @@ public class SetTextRequest : IpcRequest
 
     /// <summary>When true, focus the element and type via OS keyboard input instead of UI Automation.</summary>
     public bool Physical { get; set; }
+
+    /// <summary>When true, leave the field afterwards (as Tab would), write pending bindings and report the bound source values.</summary>
+    public bool Commit { get; set; }
 }
 
 public class SetTextResponse : IpcResponse

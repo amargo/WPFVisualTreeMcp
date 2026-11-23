@@ -312,7 +312,10 @@ shell call. No MCP handshake required; `--help` is self-documenting.
     the error lists the available items.
   - `set-text` — `IValueProvider.SetValue` by default, with TextBox/PasswordBox
     direct-property and reflected fallbacks; `--physical` types via keyboard.
-    The response reports the value read back after the write.
+    The response reports the value read back after the write. `--commit` / `commit=true` then leaves the
+    field (MoveFocus Next), writes dirty bindings (template-set ones found by property name) and reports
+    bound source values and validation errors; `InspectorService.CommitTextAsync` waits off the Dispatcher
+    until physically typed text has arrived.
   - `send-keys` — OS-level keyboard input; modifiers `Ctrl/Shift/Alt/Win` plus
     letters, digits, F1-F12, and named keys.
   - `ControlInteractor` prepares interactions; mouse/touch executors run their timed sequences on workers.

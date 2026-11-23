@@ -366,8 +366,7 @@ internal sealed class ControlInteractor
         var landed = focus != null && !ReferenceEquals(focus, element) ? $" into the inner {focus.GetType().Name}" : "";
         var warning = focus is UIElement target && IsEditor(target) ? ""
             : $" (keyboard focus is on {focus?.GetType().Name ?? "nothing"}, not a text editor: verify the value and its binding)";
-        if (CommitsOnLostFocus(focus, element))
-            warning += " (the Text binding updates its source on LostFocus and focus is still in the field: the bound value is unchanged until focus leaves, e.g. send Tab)";
+        if (CommitsOnLostFocus(focus, element)) warning += LostFocusWarning;
 
         // Select-all + delete the existing content first.
         NativeMethods.KeyDown(NativeMethods.VK_CONTROL);
@@ -383,6 +382,87 @@ internal sealed class ControlInteractor
         }
 
         return new InteractionOutcome("Physical", $"typed {text.Length} char(s){landed} after Ctrl+A/Delete{warning}");
+    }
+
+    internal const string LostFocusWarning =
+        " (the Text binding updates its source on LostFocus and focus is still in the field: the bound value is unchanged until focus leaves; pass commit=true or send Tab)";
+
+    /// <summary>
+    /// Commits text written by set_text the way leaving the field does: moves keyboard focus on
+    /// (as Tab would) when it is inside the element, then writes any binding still holding a
+    /// pending value, and reports the bound source values and validation errors. Returns null
+    /// while typed text has not arrived yet (physical input is processed asynchronously), unless
+    /// <paramref name="force"/>.
+    /// </summary>
+    internal static string? CommitText(UIElement element, string text, bool physical, bool force)
+    {
+        var editor = Keyboard.FocusedElement is UIElement focused && IsEditor(focused) && IsWithin(focused, element) ? focused
+            : IsEditor(element) ? element
+            : ControlOperations.Descendants(element).OfType<UIElement>().FirstOrDefault(IsEditor);
+        if (physical && !force && editor is TextBoxBase && EditorText(editor) != text) return null;
+
+        var parts = new List<string>();
+        if (element.IsKeyboardFocusWithin && Keyboard.FocusedElement is UIElement current)
+        {
+            current.MoveFocus(new TraversalRequest(FocusNavigationDirection.Next));
+            parts.Add(element.IsKeyboardFocusWithin
+                ? "focus could not leave the field"
+                : $"focus moved on to {(Keyboard.FocusedElement as DependencyObject)?.GetType().Name ?? "nothing"}");
+        }
+
+        // Inner editors first: their bindings feed the wrapper's own property, whose binding then holds the new value.
+        var targets = ControlOperations.Descendants(element).Where(d => !ReferenceEquals(d, element)).Take(200).Reverse().ToList();
+        targets.Add(element);
+        var reported = new List<string>();
+        foreach (var target in targets)
+        {
+            // Local values cover bindings set in code or XAML; template-set bindings are found by name.
+            var properties = new List<DependencyProperty>();
+            var values = target.GetLocalValueEnumerator();
+            while (values.MoveNext()) properties.Add(values.Current.Property);
+            foreach (var name in ValuePropertyNames)
+                if (System.ComponentModel.DependencyPropertyDescriptor.FromName(name, target.GetType(), target.GetType())?.DependencyProperty is { } named
+                    && !properties.Contains(named))
+                    properties.Add(named);
+            foreach (var property in properties)
+            {
+                if (BindingOperations.GetBindingExpressionBase(target, property) is not { } expression) continue;
+                if (expression.IsDirty) expression.UpdateSource();
+                if (ValuePropertyNames.Contains(property.Name)
+                    && expression is BindingExpression single && single.ResolvedSource != null && single.ResolvedSourcePropertyName != null
+                    // Template plumbing between the control and its own parts is not application data.
+                    && !(single.ResolvedSource is DependencyObject source && IsWithin(source, element)))
+                    reported.Add($"{single.ParentBinding.Path?.Path ?? single.ResolvedSourcePropertyName} = {SourceValue(single, property)}");
+            }
+            if (Validation.GetHasError(target))
+                reported.AddRange(Validation.GetErrors(target).Select(e => $"validation error: {e.ErrorContent}"));
+        }
+        if (physical && force && editor is TextBoxBase && EditorText(editor) != text)
+            parts.Add($"the field shows '{EditorText(editor)}', not the typed text");
+        parts.Add(reported.Count == 0 ? "no bound source to report" : "source " + string.Join("; ", reported.Distinct()));
+        return "committed: " + string.Join("; ", parts);
+    }
+
+    private static readonly string[] ValuePropertyNames = { "Text", "Password", "SelectedValue", "SelectedItem", "SelectedDate", "Value", "IsChecked" };
+
+    private static string? EditorText(UIElement editor) => editor switch
+    {
+        TextBox box => box.Text,
+        RichTextBox rich => new System.Windows.Documents.TextRange(rich.Document.ContentStart, rich.Document.ContentEnd).Text.TrimEnd('\r', '\n'),
+        _ => null
+    };
+
+    private static string SourceValue(BindingExpression expression, DependencyProperty property)
+    {
+        if (property.Name == "Password") return "(hidden)";
+        try
+        {
+            var descriptor = System.ComponentModel.TypeDescriptor.GetProperties(expression.ResolvedSource)[expression.ResolvedSourcePropertyName];
+            var value = descriptor?.GetValue(expression.ResolvedSource);
+            var text = value == null ? "null" : $"'{Convert.ToString(value, System.Globalization.CultureInfo.CurrentCulture)}'";
+            return text.Length > 82 ? text.Substring(0, 80) + "…'" : text;
+        }
+        catch (Exception ex) { return $"(unreadable: {ex.GetType().Name})"; }
     }
 
     /// <summary>True when a Text binding between the focused editor and the targeted element writes its source only on LostFocus.</summary>

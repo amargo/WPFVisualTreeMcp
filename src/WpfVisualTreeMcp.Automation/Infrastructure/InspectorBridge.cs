@@ -702,13 +702,17 @@ public partial class InspectorBridge : IIpcBridge
     public async Task<string?> GetCompatibilityNoteAsync(int? processId = null)
     {
         var pid = processId ?? EnsureConnected().ProcessId;
-        if (!_inspectorLevels.TryGetValue(pid, out var level))
-        {
-            var capabilities = await SendRequestAsync<GetCapabilitiesRequest, GetCapabilitiesResponse>(pid, new GetCapabilitiesRequest());
-            if (!capabilities.Success) return null;
-            level = _inspectorLevels[pid] = capabilities.FeatureLevel;
-        }
-        return InspectorFeatures.CompatibilityNote(level);
+        var level = await InspectorLevelAsync(pid);
+        return level < 0 ? null : InspectorFeatures.CompatibilityNote(level);
+    }
+
+    /// <summary>The feature level of the Inspector loaded in the process (0 for old builds), or -1 when unknown.</summary>
+    private async Task<int> InspectorLevelAsync(int pid)
+    {
+        if (_inspectorLevels.TryGetValue(pid, out var level)) return level;
+        var capabilities = await SendRequestAsync<GetCapabilitiesRequest, GetCapabilitiesResponse>(pid, new GetCapabilitiesRequest());
+        if (!capabilities.Success) return -1;
+        return _inspectorLevels[pid] = capabilities.FeatureLevel;
     }
 
     /// <summary>The explanation for a request that got no reply because the application is gone; null while it still runs.</summary>
@@ -811,15 +815,19 @@ public partial class InspectorBridge : IIpcBridge
         };
     }
 
-    public async Task<SetTextResult> SetTextAsync(string elementHandle, string text, bool physical)
+    public async Task<SetTextResult> SetTextAsync(string elementHandle, string text, bool physical, bool commit = false)
     {
         var session = EnsureConnected();
+        // An older Inspector would ignore the flag and report success without committing.
+        if (commit && await InspectorLevelAsync(session.ProcessId) < 10)
+            throw CreateException("commit needs a newer Inspector than the one loaded in the attached app. Save your work, restart the app and reattach.");
 
         var request = new SetTextRequest
         {
             ElementHandle = elementHandle,
             Text = text ?? string.Empty,
-            Physical = physical
+            Physical = physical,
+            Commit = commit
         };
 
         var response = await SendRequestAsync<SetTextRequest, SetTextResponse>(

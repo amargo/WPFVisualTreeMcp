@@ -799,12 +799,12 @@ public class WpfTools
     }
 
     [McpServerTool]
-    [Description("Set the text/value of a UI element (TextBox, ComboBox, etc.). By default uses UI Automation IValueProvider.SetValue (clean, no focus needed, raises proper events). Falls back to setting TextBox.Text or PasswordBox.Password directly, or a reflected string 'Text' property. Set physical=true to focus the element and type via OS keyboard input (clears existing text with Ctrl+A/Delete first, then types each character; moves window focus; on a composite control it types into the inner text box; nothing is typed unless the application owns the foreground). Focus stays in the field, so a binding that updates on LostFocus (the TextBox default) keeps its old source value until focus leaves: the result says so, send Tab with wpf_send_keys to commit. STATE-CHANGING." + InputTargetDescription)]
+    [Description("Set the text/value of a UI element (TextBox, ComboBox, etc.). By default uses UI Automation IValueProvider.SetValue (clean, no focus needed, raises proper events). Falls back to setting TextBox.Text or PasswordBox.Password directly, or a reflected string 'Text' property. Set physical=true to focus the element and type via OS keyboard input (clears existing text with Ctrl+A/Delete first, then types each character; moves window focus; on a composite control it types into the inner text box; nothing is typed unless the application owns the foreground). Focus stays in the field, so a binding that updates on LostFocus (the TextBox default) keeps its old source value until focus leaves: the result says so. commit=true (any mode) then leaves the field as Tab would, writes bindings still holding the value, and reports the bound source values and validation errors ('committed: ...; source Amount = '12,50''): use it when the value must reach the view model, e.g. before saving. STATE-CHANGING." + InputTargetDescription)]
     public async Task<object> WpfSetText(string text, string? element_handle = null, bool physical = false,
-        string? automation_id = null, string? root_handle = null)
+        string? automation_id = null, string? root_handle = null, bool commit = false)
     {
         var handle = await _ipcBridge.ResolveElementHandleAsync(element_handle, automation_id, root_handle);
-        var result = await _ipcBridge.SetTextAsync(handle, text ?? string.Empty, physical);
+        var result = await _ipcBridge.SetTextAsync(handle, text ?? string.Empty, physical, commit);
         return new
         {
             success = true,
