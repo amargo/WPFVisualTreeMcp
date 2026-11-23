@@ -28,7 +28,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `wpf_native_dialog` `wait_ms` / CLI `dialog --wait`: wait for a dialog that an asynchronous
   operation opens later (listing), or for a follow-up dialog after an answer.
 - `wpf_launch` / CLI `launch`: start an application by its `.exe` path, wait for its first
-  window and attach.
+  window and attach. Only .NET applications outside the Windows directory; shells and script
+  hosts are refused.
 - `wpf_window` / CLI `window`: list top-level WPF windows, wait for one to appear or close,
   and activate, minimize, maximize, restore or close one.
 - `wpf_native_dialog` / CLI `dialog`: list and answer native Win32 dialogs (MessageBox) of

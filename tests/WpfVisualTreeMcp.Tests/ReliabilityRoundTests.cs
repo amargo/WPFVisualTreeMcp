@@ -112,6 +112,33 @@ public class ReliabilityRoundTests
     }
 
     [Fact]
+    public void Launch_runs_only_dotnet_applications_and_never_a_shell()
+    {
+        var system = Environment.GetFolderPath(Environment.SpecialFolder.System);
+        AppWindows.LaunchRefusal(Path.Combine(system, "cmd.exe")).Should().Contain("Windows component");
+        AppWindows.LaunchRefusal(Path.Combine(system, "notepad.exe")).Should().Contain("Windows component");
+
+        var dir = Directory.CreateDirectory(Path.Combine(Path.GetTempPath(), "launch-" + Guid.NewGuid().ToString("N"))).FullName;
+        try
+        {
+            var managed = typeof(ReliabilityRoundTests).Assembly.Location;
+            string Copy(string from, string name) { var to = Path.Combine(dir, name); File.Copy(from, to); return to; }
+
+            AppWindows.LaunchRefusal(Copy(managed, "Kur.Main.exe")).Should().BeNull("a .NET Framework app is a managed exe");
+            AppWindows.LaunchRefusal(Copy(managed, "pwsh.exe")).Should().Contain("shell");
+            AppWindows.LaunchRefusal(Copy(Path.Combine(system, "cmd.exe"), "tool.exe")).Should().Contain("not a .NET application");
+
+            // .NET 5+: native apphost next to the managed dll and its runtimeconfig.
+            var host = Copy(Path.Combine(system, "cmd.exe"), "App.exe");
+            AppWindows.LaunchRefusal(host).Should().Contain("not a .NET application");
+            Copy(managed, "App.dll");
+            File.WriteAllText(Path.Combine(dir, "App.runtimeconfig.json"), "{}");
+            AppWindows.LaunchRefusal(host).Should().BeNull();
+        }
+        finally { Directory.Delete(dir, true); }
+    }
+
+    [Fact]
     public async Task ReadGridWhen_ReturnsImmediatelyWithoutConditions()
     {
         var calls = 0;

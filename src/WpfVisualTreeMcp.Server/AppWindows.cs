@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Reflection.PortableExecutable;
 using WpfVisualTreeMcp.Automation.Infrastructure;
 using WpfVisualTreeMcp.Shared.Ipc;
 using WpfVisualTreeMcp.Shared.Models;
@@ -17,8 +18,7 @@ internal static class AppWindows
     {
         if (string.IsNullOrWhiteSpace(path)) throw error("path is required: the full path of the application's .exe file.");
         var file = Path.GetFullPath(path);
-        if (!File.Exists(file) || !file.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
-            throw error($"'{file}' is not an existing .exe file.");
+        if (LaunchRefusal(file) is { } refusal) throw error(refusal);
         if (workingDirectory != null && !Directory.Exists(workingDirectory)) throw error($"Working directory '{workingDirectory}' does not exist.");
         timeoutMs = Math.Clamp(timeoutMs, 1000, 120000);
 
@@ -117,6 +117,47 @@ internal static class AppWindows
                 : $"{action} applied to '{targets[0].Title}'",
             windows = after.Windows
         };
+    }
+
+    // Shells and script hosts run whatever their arguments say; .NET-based ones (pwsh) pass the .NET check.
+    private static readonly string[] CommandHosts =
+    {
+        "cmd", "powershell", "powershell_ise", "pwsh", "wscript", "cscript", "mshta", "rundll32", "regsvr32",
+        "msiexec", "wsl", "bash", "sh", "conhost", "wt", "dotnet", "msbuild", "installutil", "regasm", "regsvcs"
+    };
+
+    /// <summary>
+    /// Why <paramref name="file"/> may not be launched, or null. Launch is limited to .NET applications
+    /// outside the Windows directory and never starts a shell or script host: the tool is reachable by
+    /// an agent whose instructions may come from text it read, so it must not run arbitrary commands.
+    /// </summary>
+    internal static string? LaunchRefusal(string file)
+    {
+        if (!File.Exists(file) || !file.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
+            return $"'{file}' is not an existing .exe file.";
+        var windows = Environment.GetFolderPath(Environment.SpecialFolder.Windows);
+        if (windows.Length > 0 && file.StartsWith(windows.TrimEnd('\\') + "\\", StringComparison.OrdinalIgnoreCase))
+            return $"'{file}' is a Windows component; only WPF applications can be launched.";
+        var name = Path.GetFileNameWithoutExtension(file);
+        if (CommandHosts.Contains(name, StringComparer.OrdinalIgnoreCase))
+            return $"'{name}' is a shell or command host; only WPF applications can be launched.";
+        // .NET Framework apps are managed .exe files; .NET Core/5+ apps are a native host next to a managed .dll.
+        var hostedDll = Path.ChangeExtension(file, ".dll");
+        if (!IsManaged(file) && !(IsManaged(hostedDll) && File.Exists(Path.ChangeExtension(file, ".runtimeconfig.json"))))
+            return $"'{file}' is not a .NET application; only WPF applications can be launched.";
+        return null;
+    }
+
+    private static bool IsManaged(string file)
+    {
+        try
+        {
+            if (!File.Exists(file)) return false;
+            using var stream = File.OpenRead(file);
+            using var reader = new PEReader(stream);
+            return reader.PEHeaders.CorHeader != null;
+        }
+        catch (Exception) { return false; }
     }
 
     private static string Describe(IEnumerable<WpfWindowInfo> windows)

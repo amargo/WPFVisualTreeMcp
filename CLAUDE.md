@@ -160,7 +160,8 @@ Target WPF Application (.NET Framework)
 - `wpf_launch` / CLI `launch` and `wpf_window` / CLI `window` live in `Server/AppWindows.cs` and reuse
   the Inspector's existing `Window` request (no Inspector change). Launch uses shell execute so the
   application does not inherit the server's stdout (the MCP stream), waits for the first window, then
-  attaches; it never kills the process. Window waits poll the list from the server side.
+  attaches; it never kills the process. `LaunchRefusal` allows only .NET executables outside the
+  Windows directory and refuses shells/command hosts: the tool must not become a command runner. Window waits poll the list from the server side.
 
 ### Native dialogs
 - `wpf_native_dialog` / CLI `dialog` (`NativeDialogs.cs`) list and answer Win32 `#32770` windows of
