@@ -665,6 +665,10 @@ property inspection or other handle-based inspection tools, or
 An older Inspector must be updated by restarting the target app and reattaching;
 AutomationId requests fail explicitly until it supports the filter.
 
+Searches without `root_handle` also cover an open context menu or tooltip, which no window's
+tree contains: open the menu with `wpf_click_element` `click_type="right"`, find its item with
+`type_name="=MenuItem"` and `text`, then click it with `wpf_click_element` (Invoke).
+
 **Parameters:**
 
 | Name | Type | Required | Description |

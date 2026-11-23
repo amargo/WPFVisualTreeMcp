@@ -57,6 +57,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Searches without a root (find, wait, automation_id lookup, report) also cover open
+  context menus and tooltips, so a context menu item can be found and clicked.
 - `wpf_send_keys` sends keys only once the application verifiably owns the foreground
   and focus is inside the target, instead of typing into whichever window is in front;
   the result warns when WPF never received the key (global hotkey, other window).

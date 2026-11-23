@@ -946,14 +946,48 @@ public class TreeWalker
     {
         var roots = new List<DependencyObject>();
         var app = Application.Current;
-        if (app == null) return roots;
+        if (app != null)
+            foreach (Window window in app.Windows)
+                roots.Add(window);
 
-        foreach (Window window in app.Windows)
-        {
-            roots.Add(window);
-        }
-
+        roots.AddRange(GetDetachedPopupContents());
         return roots;
+    }
+
+    /// <summary>
+    /// Content of open popups that no window's visual tree reaches: context menus and tooltips
+    /// are hosted in a Popup without a visual parent. Template popups (ComboBox drop-downs,
+    /// menu submenus) are left out, since the owning window's tree already includes them.
+    /// </summary>
+    internal static List<DependencyObject> GetDetachedPopupContents()
+    {
+        var contents = new List<DependencyObject>();
+        foreach (PresentationSource source in PresentationSource.CurrentSources)
+        {
+            // Sources of other UI threads cannot be read from here.
+            if (!source.CheckAccess() || source.IsDisposed || source.RootVisual is not Visual root || root is Window) continue;
+            if (FindHostingPopup(root) is { } popup && popup.IsOpen && popup.Child != null
+                && VisualTreeHelper.GetParent(popup) == null && !contents.Contains(popup.Child))
+                contents.Add(popup.Child);
+        }
+        return contents;
+    }
+
+    // PopupRoot is internal; the popup's Child sits a few levels below it with the Popup as logical parent.
+    private static Popup? FindHostingPopup(DependencyObject root)
+    {
+        var level = new List<DependencyObject> { root };
+        for (var depth = 0; depth < 4 && level.Count > 0; depth++)
+        {
+            var next = new List<DependencyObject>();
+            foreach (var node in level)
+            {
+                if (LogicalTreeHelper.GetParent(node) is Popup popup) return popup;
+                for (var i = 0; i < VisualTreeHelper.GetChildrenCount(node); i++) next.Add(VisualTreeHelper.GetChild(node, i));
+            }
+            level = next;
+        }
+        return null;
     }
 
     private static string EscapeXml(string? text)

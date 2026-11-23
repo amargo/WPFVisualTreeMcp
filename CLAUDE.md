@@ -199,6 +199,9 @@ The Inspector strips UTF-8 BOM (0xEF 0xBB 0xBF) before JSON parsing to prevent d
 - Traverses standard visual children via `VisualTreeHelper`
 - Also enumerates `AdornerLayer` adorners (e.g., Fluent.Ribbon Backstage)
 - Traverses into `Popup` child elements (separate visual trees)
+- Searches without a root also cover open context menus and tooltips: their Popup has no visual
+  parent, so `GetAllSearchRoots` adds its content from `PresentationSource.CurrentSources`
+  (same UI thread only; template popups such as ComboBox drop-downs are already in the window tree)
 - `FindElements` searches across ALL open windows when no `root_handle` given
 - Query filters (AND semantics): `type_name` (partial), `element_name` (x:Name substring),
   `text` (visible text content — button captions, TextBlock text, window title, tooltip,
