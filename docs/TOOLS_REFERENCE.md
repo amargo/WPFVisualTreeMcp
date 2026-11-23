@@ -208,6 +208,55 @@ reports "not ready" without changing anything; retry.
 wpfinspect edit-cell --pid 1234 --automation-id Orders --row 3 --column Quantity --text 12
 ```
 
+## Launch and windows
+
+### wpf_launch
+
+Starts a WPF application, waits for its first window and attaches to it. The application
+becomes the attached one for all other tools.
+
+| Parameter | Description |
+|-----------|-------------|
+| `path` | Full path of the `.exe` (required) |
+| `arguments` | Command line passed to the application |
+| `working_directory` | Defaults to the folder of the `.exe` |
+| `timeout_ms` | Time allowed for the first window (default 30000, max 120000) |
+| `auto_inject` | Inject the Inspector (default true); false for self-hosted applications |
+
+Returns `process_id`, `startup_ms`, the Inspector status and `windows`. The first window is
+often a splash or login window: wait for the one you need with `wpf_window`. The server
+never stops the process, also not after a startup error. **Starts a program.**
+
+```powershell
+wpfinspect launch --path C:\apps\MyApp\MyApp.exe
+```
+
+### wpf_window
+
+Lists, awaits or controls the top-level WPF windows of the attached application.
+
+| Parameter | Description |
+|-----------|-------------|
+| `action` | `list` (default), `wait`, `wait_closed`, `activate`, `minimize`, `maximize`, `restore`, `close` |
+| `window_handle` | Window handle from a listing |
+| `title` | Case-insensitive substring of the window title |
+| `automation_id` | Exact AutomationId or `x:Name` of the window |
+| `timeout_ms` | For `wait` / `wait_closed` (default 10000, max 120000) |
+
+Each window has `handle` (usable as `root_handle` / `element_handle`), `title`,
+`automationId`, `isMain`, `isActive`, `isVisible`, `state` and `ownerHandle`. `wait` returns
+once a visible window matches, `wait_closed` once none does; both fail with the list of
+open windows on timeout. The other actions need exactly one matching window. `close` only
+requests the close: a `Closing` handler may ask for confirmation (answer a MessageBox with
+`wpf_native_dialog`) or cancel it. Native Win32 dialogs are not WPF windows and are not
+listed. **activate, minimize, maximize, restore and close change application state.**
+
+```powershell
+wpfinspect window --pid 1234
+wpfinspect window --pid 1234 --action wait --title "Main" --timeout 20000
+wpfinspect window --pid 1234 --action close --title "Main"
+```
+
 ## Native dialogs
 
 ### wpf_native_dialog
@@ -222,6 +271,7 @@ is answered.
 |-----------|-------------|
 | `answer` | Caption of the push button to press (exact, case-insensitive, access key ignored). Omit to list |
 | `dialog_handle` | `handle` of the dialog; required only when several are open |
+| `wait_ms` | 0-25000 (default 0). Listing waits until a dialog is open; answering waits for a follow-up dialog |
 
 Listing returns `dialogs`, each with `handle`, `title`, `text`, `buttons` (`text`,
 `isEnabled`, `isDefault`), `isForeground` and `ownerTitle`. An empty list means no dialog
@@ -231,9 +281,16 @@ before answering. No keyboard or mouse input is sent and the application may be 
 background. **Answering changes application state**: the application acts on the choice.
 Task dialogs draw their own message; only their title and buttons are reported.
 
+A dialog opened by asynchronous work (an error message after a server call, a
+confirmation after a save) appears only after that work ends, so a listing made right
+after the triggering click or answer can be empty. Pass `wait_ms` to wait for it; the
+call returns as soon as a dialog (after an answer: a different dialog) is open and
+reports `waited_ms`.
+
 ```powershell
 wpfinspect dialog --pid 1234
 wpfinspect dialog --pid 1234 --answer No
+wpfinspect dialog --pid 1234 --answer OK --wait 5000
 ```
 
 ## Mouse Interaction

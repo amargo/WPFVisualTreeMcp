@@ -29,13 +29,13 @@ public static class CliRunner
         "styles", "watch-property", "highlight", "click", "move-mouse", "scroll", "drag", "touch", "select-item", "set-text",
         "send-keys", "wait-for", "set-property", "revert-property", "snapshot", "diff",
         "evaluate-binding", "explain-triggers", "layout", "export", "screenshot", "read-grid",
-        "record", "get-recording", "assert", "replay", "export-test", "edit-cell", "dialog",
+        "record", "get-recording", "assert", "replay", "export-test", "edit-cell", "dialog", "launch", "window",
     };
 
     /// <summary>Options that never take a value (presence alone is meaningful).</summary>
     private static readonly HashSet<string> KnownFlags = new(StringComparer.OrdinalIgnoreCase)
     {
-        "auto-inject", "compact", "outline", "short-path", "on-screen", "has-text", "verbose", "physical", "horizontal", "visible-only", "full-content", "all", "help", "h", "check", "status",
+        "auto-inject", "no-inject", "compact", "outline", "short-path", "on-screen", "has-text", "verbose", "physical", "horizontal", "visible-only", "full-content", "all", "help", "h", "check", "status",
     };
 
     private static string Exe =>
@@ -604,14 +604,30 @@ public static class CliRunner
                     break;
                 }
 
+                case "launch":
+                {
+                    WriteJson(await AppWindows.LaunchAsync(processManager, bridge, cli.GetStringOrNull("path") ?? string.Empty,
+                        cli.GetStringOrNull("args"), cli.GetStringOrNull("cwd"), cli.GetInt("timeout", AppWindows.DefaultLaunchTimeoutMs),
+                        !cli.Flags.Contains("no-inject"), message => new ArgumentException(message)), cli);
+                    break;
+                }
+
+                case "window":
+                {
+                    await AttachAsync(processManager, cli, false);
+                    WriteJson(await AppWindows.WindowAsync(bridge, cli.GetStringOrNull("action"), cli.GetStringOrNull("window"),
+                        cli.GetStringOrNull("title"), cli.GetStringOrNull("automation-id"),
+                        cli.GetInt("timeout", AppWindows.DefaultWaitTimeoutMs), message => new ArgumentException(message)), cli);
+                    break;
+                }
+
                 case "dialog":
                 {
                     await AttachAsync(processManager, cli, false);
                     var dialogAnswer = cli.GetStringOrNull("answer");
                     long? dialogHandle = long.TryParse(cli.GetStringOrNull("dialog"), out var parsedDialog) ? parsedDialog
                         : cli.GetStringOrNull("dialog") == null ? null : throw new ArgumentException("--dialog must be a dialog handle from 'dialog'.");
-                    var dialogs = await bridge.NativeDialogAsync(dialogAnswer, dialogHandle);
-                    WriteJson(dialogAnswer == null ? new { dialogs = dialogs.Dialogs } : new { result = dialogs.Detail, dialogs = dialogs.Dialogs }, cli);
+                    WriteJson(await WpfTools.NativeDialogAsync(bridge, dialogAnswer, dialogHandle, cli.GetInt("wait", 0)), cli);
                     break;
                 }
 
@@ -784,7 +800,9 @@ COMMANDS
   screenshot    --pid [--handle H] [--out FILE] [--max-width N] [--max-height N] [--mode auto|render|screen] [--full-content]
   read-grid     --pid (--handle H | --automation-id ID [--root H]) [--offset N] [--limit N] [--columns 'A,B']   (DataGrid rows as text)
   edit-cell     --pid (--handle H | --automation-id ID [--root H]) --row N --column C --text S   (changes app data)
-  dialog        --pid [--answer BUTTON] [--dialog HANDLE]   (list or answer native MessageBox dialogs)
+  dialog        --pid [--answer BUTTON] [--dialog HANDLE] [--wait MS]   (list or answer native MessageBox dialogs)
+  launch        --path EXE [--args 'A B'] [--cwd DIR] [--timeout MS] [--no-inject]   (start an app and attach)
+  window        --pid [--action list|wait|wait_closed|activate|minimize|maximize|restore|close] [--window H | --title S | --automation-id ID] [--timeout MS]
 
 Element handles (elem_XXXXXXXX) come from 'tree' / 'find' and stay valid while
 the target app keeps running.
@@ -818,13 +836,28 @@ TYPICAL WORKFLOW
                     + "  Dump the visual tree. --root zooms into a subtree; --depth defaults to 25.\n"
                     + "  --outline prints indented text (type, [name], handle per line) instead of\n"
                     + "  JSON; it is less than half the size.",
-            "dialog" => "dialog --pid <id> [--answer <button caption>] [--dialog <handle>]\n"
+            "launch" => "launch --path <exe> [--args '<command line>'] [--cwd <dir>] [--timeout <ms>] [--no-inject]\n"
+                      + "  Start an application, wait for its first window and attach (the Inspector is\n"
+                      + "  injected unless --no-inject). Prints process_id and the open windows. Takes no\n"
+                      + "  --pid. --cwd defaults to the folder of the exe. The process is never stopped\n"
+                      + "  by this command; close it with the window command and --action close.",
+            "window" => "window --pid <id> [--action <action>] [--window <handle> | --title <text> | --automation-id <id>] [--timeout <ms>]\n"
+                      + "  list (default): top-level WPF windows with handle, title and state.\n"
+                      + "  wait: until a visible window matches (after launch or an action opening one).\n"
+                      + "  wait_closed: until no visible window matches (login or progress windows).\n"
+                      + "  activate | minimize | maximize | restore | close: need exactly one match.\n"
+                      + "  --title is a case-insensitive substring; --timeout (default 10000) applies to\n"
+                      + "  the waits. close only requests it: a confirmation may appear (see dialog).",
+            "dialog" => "dialog --pid <id> [--answer <button caption>] [--dialog <handle>] [--wait <ms>]\n"
                       + "  Without --answer: list the application's open native Win32 dialogs (MessageBox\n"
                       + "  and other standard dialogs) with title, text and buttons. They are not WPF\n"
                       + "  elements, so tree/find cannot see them. With --answer: press that push button\n"
                       + "  (exact caption, case-insensitive; captions follow the Windows language).\n"
                       + "  --dialog is needed only when several dialogs are open. No keyboard or mouse\n"
-                      + "  input is sent. Answering makes the application act on the choice.",
+                      + "  input is sent. Answering makes the application act on the choice.\n"
+                      + "  --wait (0-25000): dialogs opened after asynchronous work (an error after a\n"
+                      + "  server call) appear later. Listing waits until one is open; answering waits\n"
+                      + "  for a follow-up dialog. Returns as soon as one appears.",
             "edit-cell" => "edit-cell --pid <id> (--handle H | --automation-id ID [--root H]) --row <n> --column <header or binding path> --text <text>\n"
                          + "  Edit one DataGrid cell: begins the edit, sets the text and commits cell and\n"
                          + "  row, so validation and binding run as for a user edit. --row is the read-grid\n"

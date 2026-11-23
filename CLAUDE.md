@@ -40,7 +40,7 @@ python scripts/test_automation_package.py --packages artifacts/packages
 AI Agent (Claude Code)
     ↓ [MCP Protocol - JSON-RPC over stdio]
 MCP Server (.NET 8.0)
-    ├─ WpfTools (41 tools)
+    ├─ WpfTools (43 tools)
     ├─ ProcessManager (discovers WPF processes)
     └─ NamedPipeBridge (IPC)
         ↓ [Named Pipes: wpf_inspector_{pid}]
@@ -54,15 +54,15 @@ Target WPF Application (.NET Framework)
         └─ IpcServer (named pipe communication)
 ```
 
-**Key Design:** The server runs separately and communicates via named pipes. `wpf_click_element`, `wpf_move_mouse`, `wpf_scroll`, `wpf_drag`, `wpf_touch_gesture`, `wpf_select_item`, `wpf_set_text`, `wpf_send_keys`, `wpf_edit_grid_cell`, `wpf_native_dialog` (when answering), `wpf_set_property`, and `wpf_revert_property` change application state. `wpf_replay` executes recorded actions; full-content screenshots can temporarily scroll controls and trigger handlers. Recording/snapshots/watches maintain Inspector state. `wpf_set_property` is reversible via `wpf_revert_property` (per-session undo stack that restores the prior binding, local value, or default).
+**Key Design:** The server runs separately and communicates via named pipes. `wpf_click_element`, `wpf_move_mouse`, `wpf_scroll`, `wpf_drag`, `wpf_touch_gesture`, `wpf_select_item`, `wpf_set_text`, `wpf_send_keys`, `wpf_edit_grid_cell`, `wpf_native_dialog` (when answering), `wpf_launch`, `wpf_window` (activate/minimize/maximize/restore/close), `wpf_set_property`, and `wpf_revert_property` change application state. `wpf_replay` executes recorded actions; full-content screenshots can temporarily scroll controls and trigger handlers. Recording/snapshots/watches maintain Inspector state. `wpf_set_property` is reversible via `wpf_revert_property` (per-session undo stack that restores the prior binding, local value, or default).
 
 ## Key Source Locations
 
 | Component | Location | Purpose |
 |-----------|----------|---------|
 | MCP Server Entry | `src/WpfVisualTreeMcp.Server/Program.cs` | Server init with MCP SDK; routes to CLI mode if args present |
-| Tool Definitions | `src/WpfVisualTreeMcp.Server/WpfTools.cs` | 41 tools with `[McpServerTool]` attributes |
-| CLI Front-End | `src/WpfVisualTreeMcp.Server/Cli/CliRunner.cs` | 41 inspection/workflow commands plus CLI-only `update` |
+| Tool Definitions | `src/WpfVisualTreeMcp.Server/WpfTools.cs` | 43 tools with `[McpServerTool]` attributes |
+| CLI Front-End | `src/WpfVisualTreeMcp.Server/Cli/CliRunner.cs` | 43 inspection/workflow commands plus CLI-only `update` |
 | Workflow Recording | `WorkflowRecorder.cs`, `StableSelectors.cs`, `InspectorService.Workflow.cs` | Inspector-owned recording and gated replay; exact selectors, explicit waits/assertions |
 | Test Export | `src/WpfVisualTreeMcp.Server/WorkflowTestExporter.cs` | Data-only workflow JSON plus a standalone xUnit project using CLI replay |
 | Aggregate Diagnostics | `src/WpfVisualTreeMcp.Inspector/DiagnosticReporter.cs` | Bounded realized-tree scan, current binding/validation errors and separate process-wide trace history |
@@ -155,6 +155,12 @@ Target WPF Application (.NET Framework)
   Inspector behavior.
 - `scripts/Deploy-Local.ps1` rebuilds Release in place while MCP servers or inspected apps hold
   the binaries (renames loaded files aside, removes stale copies once free).
+
+### Launch and windows
+- `wpf_launch` / CLI `launch` and `wpf_window` / CLI `window` live in `Server/AppWindows.cs` and reuse
+  the Inspector's existing `Window` request (no Inspector change). Launch uses shell execute so the
+  application does not inherit the server's stdout (the MCP stream), waits for the first window, then
+  attaches; it never kills the process. Window waits poll the list from the server side.
 
 ### Native dialogs
 - `wpf_native_dialog` / CLI `dialog` (`NativeDialogs.cs`) list and answer Win32 `#32770` windows of
@@ -262,7 +268,7 @@ The server uses the official Microsoft/Anthropic MCP SDK. Configure in `.mcp.jso
 The server executable doubles as a command-line tool. `WpfVisualTreeMcp.Server.exe`
 with **no arguments** runs the MCP stdio server; with **any recognised subcommand**
 it runs a single one-shot CLI command instead (`Program.cs` checks `args[0]` via
-`CliRunner.IsCliCommand`). This gives the same 41 capabilities without an MCP
+`CliRunner.IsCliCommand`). This gives the same 43 capabilities without an MCP
 connection — useful when the MCP server is not connected, for scripting, or for
 verifying the pipeline manually.
 
@@ -276,7 +282,7 @@ shell call. No MCP handshake required; `--help` is self-documenting.
 - **Stateless:** each command re-creates the lightweight session internally, so
   element handles (which live in the Inspector) stay valid across separate calls
   as long as the target app keeps running.
-- **Targeting:** every inspection command except `list` takes `--pid <id>` or `--process <name>`; `update` takes neither.
+- **Targeting:** every inspection command except `list` and `launch` takes `--pid <id>` or `--process <name>`; `update` takes neither.
 - **Updating:** `update [--check | --status]` is CLI-only (not an MCP tool). It updates
   the invoked global/custom-path tool or portable folder, never another copy.
   Source builds and package caches are detected and left to their own workflows.

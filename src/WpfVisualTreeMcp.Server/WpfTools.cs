@@ -102,6 +102,18 @@ public class WpfTools
     }
 
     [McpServerTool]
+    [Description("Start a WPF application from its .exe path, wait for its first window and attach to it (injecting the Inspector unless auto_inject=false). Returns process_id, Inspector status and the open windows; the application becomes the attached one for all other tools. arguments is the command line passed to the application; working_directory defaults to the folder of the .exe. The first window is often a splash or login window: use wpf_window action='wait' with the title of the window you need before working with it. The process is never stopped by this server: on a startup error it keeps running. Close it with wpf_window action='close'. STATE-CHANGING: starts a program on this computer.")]
+    public Task<object> WpfLaunch(string path, string? arguments = null, string? working_directory = null,
+        int timeout_ms = AppWindows.DefaultLaunchTimeoutMs, bool auto_inject = true) =>
+        AppWindows.LaunchAsync(_processManager, _ipcBridge, path, arguments, working_directory, timeout_ms, auto_inject, message => new McpException(message));
+
+    [McpServerTool]
+    [Description("List, await or control the top-level WPF windows of the attached application. action: 'list' (default; each window has handle, title, automationId, isMain, isActive, isVisible, state, ownerHandle: the handle works as root_handle/element_handle in other tools), 'wait' (until a visible window matches; use after wpf_launch or after an action that opens a window), 'wait_closed' (until no visible window matches, e.g. a login or progress window), 'activate', 'minimize', 'maximize', 'restore', 'close'. Select the window with window_handle, title (case-insensitive substring) or automation_id (exact AutomationId or x:Name); actions other than list/wait need exactly one match. timeout_ms (default 10000, max 120000) applies to wait and wait_closed. 'close' only requests the close: a Closing handler may show a confirmation (answer a MessageBox with wpf_native_dialog) or cancel it, and closing the main window usually ends the application. Native Win32 dialogs are not listed here; use wpf_native_dialog. activate/minimize/maximize/restore/close are STATE-CHANGING.")]
+    public Task<object> WpfWindow(string? action = null, string? window_handle = null, string? title = null, string? automation_id = null,
+        int timeout_ms = AppWindows.DefaultWaitTimeoutMs) =>
+        AppWindows.WindowAsync(_ipcBridge, action, window_handle, title, automation_id, timeout_ms, message => new McpException(message));
+
+    [McpServerTool]
     [Description("Get the visual tree hierarchy. Use root_handle to start from a specific element (from wpf_find_elements). Use max_depth to control depth (1-100, default 25). For deep UIs like AvalonDock, increase max_depth or use root_handle to zoom into a subtree. outline=true returns an indented text outline (one line per element: short type, [name], handle) that is less than half the size of the JSON tree; prefer it for browsing. To locate specific controls use wpf_find_elements instead of dumping the tree.")]
     public async Task<object> WpfGetVisualTree(string? root_handle = null, int max_depth = 25, bool outline = false)
     {
@@ -149,14 +161,38 @@ public class WpfTools
     }
 
     [McpServerTool]
-    [Description("List or answer native Win32 dialogs of the attached application: MessageBox prompts (Yes/No, OK/Cancel) and other standard dialog windows. They are not WPF elements, so wpf_find_elements and the visual tree cannot see them, and while one is open the application is blocked: a click or key that opened it may report a timeout, and other input tools fail until it is answered. Without answer: returns each open dialog with handle, title, text and buttons (text, isEnabled, isDefault); an empty list means none is open. With answer: presses the push button with that exact caption (case-insensitive, access-key marker ignored; captions follow the Windows display language, so list first) and returns the result plus the dialogs still open. dialog_handle is required only when several dialogs are open. Works when the application is in the background and sends no keyboard or mouse input. STATE-CHANGING when answering: the application acts on the chosen button (e.g. confirms a deletion).")]
-    public async Task<object> WpfNativeDialog(string? answer = null, long? dialog_handle = null)
+    [Description("List or answer native Win32 dialogs of the attached application: MessageBox prompts (Yes/No, OK/Cancel) and other standard dialog windows. They are not WPF elements, so wpf_find_elements and the visual tree cannot see them, and while one is open the application is blocked: a click or key that opened it may report a timeout, and other input tools fail until it is answered. Without answer: returns each open dialog with handle, title, text and buttons (text, isEnabled, isDefault); an empty list means none is open. With answer: presses the push button with that exact caption (case-insensitive, access-key marker ignored; captions follow the Windows display language, so list first) and returns the result plus the dialogs still open. dialog_handle is required only when several dialogs are open. wait_ms (0-25000, default 0): a dialog opened by an asynchronous operation (an error after a server call, a confirmation after a save) appears only later, so an immediate listing can be empty. With wait_ms, a listing waits until a dialog is open, and an answer waits for a follow-up dialog (a different one); both return as soon as one appears, otherwise after wait_ms with what is open. Works when the application is in the background and sends no keyboard or mouse input. STATE-CHANGING when answering: the application acts on the chosen button (e.g. confirms a deletion).")]
+    public async Task<object> WpfNativeDialog(string? answer = null, long? dialog_handle = null, int wait_ms = 0)
     {
         if (answer != null && string.IsNullOrWhiteSpace(answer)) throw new McpException("answer must be a button caption.");
-        var response = await _ipcBridge.NativeDialogAsync(answer, dialog_handle);
+        return await NativeDialogAsync(_ipcBridge, answer, dialog_handle, wait_ms);
+    }
+
+    /// <summary>
+    /// Lists or answers native dialogs. With <paramref name="waitMs"/>, polls until a dialog is open
+    /// (listing) or a dialog other than the answered one is open (answer), since dialogs shown after
+    /// asynchronous work appear only later.
+    /// </summary>
+    internal static async Task<object> NativeDialogAsync(IIpcBridge bridge, string? answer, long? dialogHandle, int waitMs, int pollMs = 200)
+    {
+        waitMs = Math.Clamp(waitMs, 0, 25000);
+        // A follow-up dialog is one that was not open before the answer.
+        var before = answer != null && waitMs > 0
+            ? (await bridge.NativeDialogAsync()).Dialogs.Select(d => d.Handle).ToHashSet()
+            : new HashSet<long>();
+        var response = await bridge.NativeDialogAsync(answer, dialogHandle);
+        var dialogs = response.Dialogs;
+        bool Ready() => answer == null ? dialogs.Count > 0 : dialogs.Any(d => !before.Contains(d.Handle));
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        while (!Ready() && clock.ElapsedMilliseconds < waitMs)
+        {
+            await Task.Delay(pollMs);
+            dialogs = (await bridge.NativeDialogAsync()).Dialogs;
+        }
+        object? waited = waitMs > 0 ? clock.ElapsedMilliseconds : null;
         return answer == null
-            ? new { dialogs = response.Dialogs }
-            : new { result = response.Detail, dialogs = response.Dialogs };
+            ? new { dialogs, waited_ms = waited }
+            : new { result = response.Detail, dialogs, waited_ms = waited };
     }
 
     internal static async Task<object> EditGridCellAsync(IIpcBridge bridge, string gridHandle, int rowIndex, string column, string text, Func<string, Exception> error)

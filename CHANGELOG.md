@@ -25,6 +25,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `wpf_find_elements` filters `on_screen` (inside the scroll viewport and window) and
   `has_text`.
 - `scripts/Deploy-Local.ps1` rebuilds the Release server while it is in use.
+- `wpf_native_dialog` `wait_ms` / CLI `dialog --wait`: wait for a dialog that an asynchronous
+  operation opens later (listing), or for a follow-up dialog after an answer.
+- `wpf_launch` / CLI `launch`: start an application by its `.exe` path, wait for its first
+  window and attach.
+- `wpf_window` / CLI `window`: list top-level WPF windows, wait for one to appear or close,
+  and activate, minimize, maximize, restore or close one.
 - `wpf_native_dialog` / CLI `dialog`: list and answer native Win32 dialogs (MessageBox) of
   the attached application, which the visual tree cannot see.
 - `wpf_edit_grid_cell` / CLI `edit-cell`: edit one DataGrid cell through the grid's own
