@@ -26,7 +26,7 @@ public abstract class IpcResponse
 /// </summary>
 public static class InspectorFeatures
 {
-    public const int Level = 11;
+    public const int Level = 12;
 
     /// <summary>Guidance when the loaded Inspector and this server were built at different levels; null when they match.</summary>
     public static string? CompatibilityNote(int inspectorLevel, int serverLevel = Level)
@@ -305,10 +305,19 @@ public class WaitForElementRequest : IpcRequest
 
     public int TimeoutMs { get; set; } = 10000;
     public int PollIntervalMs { get; set; } = 250;
+
+    /// <summary>When the condition already holds at the start, first wait until it stops holding (a reload starts).</summary>
+    public bool AfterChange { get; set; }
 }
 
 public class WaitForElementResponse : IpcResponse
 {
+    /// <summary>The condition already held when the wait started (it may describe the previous state).</summary>
+    public bool AlreadyMet { get; set; }
+
+    /// <summary>With AfterChange: the condition stopped holding at some point during the wait.</summary>
+    public bool Changed { get; set; }
+
     /// <summary>True when the condition was met before the timeout.</summary>
     public bool Matched { get; set; }
 

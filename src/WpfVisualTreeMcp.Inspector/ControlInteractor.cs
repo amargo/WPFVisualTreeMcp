@@ -402,11 +402,21 @@ internal sealed class ControlInteractor
         if (physical && !force && editor is TextBoxBase && EditorText(editor) != text) return null;
 
         var parts = new List<string>();
+        // Applications format and validate in their LostFocus handlers, which run only for a field that
+        // had keyboard focus: a value written through UI Automation is entered first, then left.
+        if (!element.IsKeyboardFocusWithin && editor != null && editor.Focusable && editor.IsEnabled && editor.IsVisible)
+        {
+            // Keyboard focus exists only in the active window, as when a user clicks into the field.
+            BringToForeground(Window.GetWindow(element));
+            editor.Focus();
+            if (!element.IsKeyboardFocusWithin)
+                parts.Add("the window is not active, so focus could not enter the field: only the bindings were written, the field's own LostFocus logic (formatting, validation) did not run");
+        }
         if (element.IsKeyboardFocusWithin && Keyboard.FocusedElement is UIElement current)
         {
             current.MoveFocus(new TraversalRequest(FocusNavigationDirection.Next));
             parts.Add(element.IsKeyboardFocusWithin
-                ? "focus could not leave the field"
+                ? "focus could not leave the field (the application kept it there, usually because the value is invalid)"
                 : $"focus moved on to {(Keyboard.FocusedElement as DependencyObject)?.GetType().Name ?? "nothing"}");
         }
 
@@ -437,8 +447,9 @@ internal sealed class ControlInteractor
             if (Validation.GetHasError(target))
                 reported.AddRange(Validation.GetErrors(target).Select(e => $"validation error: {e.ErrorContent}"));
         }
-        if (physical && force && editor is TextBoxBase && EditorText(editor) != text)
-            parts.Add($"the field shows '{EditorText(editor)}', not the typed text");
+        // Leaving the field may have reformatted it (a date "1231" expanded to a full date).
+        if (editor is TextBoxBase && EditorText(editor) != text)
+            parts.Add(physical && force ? $"the field shows '{EditorText(editor)}', not the typed text" : $"the field now shows '{EditorText(editor)}'");
         parts.Add(reported.Count == 0 ? "no bound source to report" : "source " + string.Join("; ", reported.Distinct()));
         return "committed: " + string.Join("; ", parts);
     }

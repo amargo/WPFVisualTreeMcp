@@ -523,7 +523,7 @@ public class WpfTools
     }
 
     [McpServerTool]
-    [Description("Wait until an element matching the criteria satisfies a condition, polling in the target app so you don't have to sleep-and-retry. Identify the element with automation_id (exact, case-sensitive), type_name, element_name and/or text (same matching as wpf_find_elements: type_name is a partial match, so 'DataGridRow' also matches DataGridRowsPresenter; use '=DataGridRow' for that type and its subclasses only). condition: 'visible' (default — element exists and is on screen), 'exists' (in the tree even if not visible), 'enabled' (visible and IsEnabled=true), 'hidden' (no matching visible element — e.g. a spinner disappeared). Returns matched (bool), waited_ms, and matched_handle/element_type when found. Use after a click that triggers async work (dialog opens, spinner clears, button enables) before the next step. timeout_ms default 10000 (max 25000); poll_interval_ms default 250.")]
+    [Description("Wait until an element matching the criteria satisfies a condition, polling in the target app so you don't have to sleep-and-retry. Identify the element with automation_id (exact, case-sensitive), type_name, element_name and/or text (same matching as wpf_find_elements: type_name is a partial match, so 'DataGridRow' also matches DataGridRowsPresenter; use '=DataGridRow' for that type and its subclasses only). condition: 'visible' (default — element exists and is on screen), 'exists' (in the tree even if not visible), 'enabled' (visible and IsEnabled=true), 'hidden' (no matching visible element — e.g. a spinner disappeared). Returns matched (bool), waited_ms, and matched_handle/element_type when found. Use after a click that triggers async work (dialog opens, spinner clears, button enables) before the next step. timeout_ms default 10000 (max 25000); poll_interval_ms default 250. A condition that already holds when the wait starts may describe the previous state (a status text such as 'Data loaded' before a reload has begun): the result then has already_met=true and a note. after_change=true waits in that case until the condition first stops holding and then holds again; the change must last at least one poll interval to be seen.")]
     public async Task<object> WpfWaitForElement(
         string? type_name = null,
         string? element_name = null,
@@ -532,7 +532,8 @@ public class WpfTools
         int timeout_ms = 10000,
         int poll_interval_ms = 250,
         string? root_handle = null,
-        string? automation_id = null)
+        string? automation_id = null,
+        bool after_change = false)
     {
         if (string.IsNullOrEmpty(type_name) && string.IsNullOrEmpty(element_name) && string.IsNullOrEmpty(text) && automation_id == null)
         {
@@ -540,15 +541,26 @@ public class WpfTools
         }
 
         var result = await _ipcBridge.WaitForElementAsync(
-            root_handle, type_name, element_name, text, condition, timeout_ms, poll_interval_ms, automation_id);
+            root_handle, type_name, element_name, text, condition, timeout_ms, poll_interval_ms, automation_id, after_change);
         return new
         {
             matched = result.Matched,
             waited_ms = result.WaitedMs,
             matched_handle = result.MatchedHandle,
-            element_type = result.ElementType
+            element_type = result.ElementType,
+            already_met = result.AlreadyMet ? true : (bool?)null,
+            note = WaitNote(result, after_change)
         };
     }
+
+    internal static string? WaitNote(WaitForResult result, bool afterChange) =>
+        afterChange
+            ? !result.Matched && !result.Changed
+                ? "the condition held for the whole wait and never changed: the expected change did not start (or was shorter than one poll interval)"
+                : null
+            : result.AlreadyMet
+                ? "the condition already held when the wait started, so this may be the previous state; to wait for a new one (e.g. after a reload) pass after_change=true"
+                : null;
 
     [McpServerTool]
     [Description("Explain an element's triggers and where a value comes from — for 'why doesn't this trigger fire?' and 'which style/setter set this value?'. Lists the element's Style triggers (walking BasedOn) AND its ControlTemplate triggers (where most visual-state triggers live, e.g. IsMouseOver/IsEnabled on a Button), each EVALUATED against the current state: the condition (property=expected), the property's CURRENT value, whether it matches, whether the trigger is active, and the setters it applies. This tells you a trigger isn't firing because its condition property currently holds a different value. Pass property_name to also attribute that property's effective value to its source: a specific style setter (which style, which setter) or an active trigger (which condition), or local/inherited/default.")]
@@ -802,7 +814,7 @@ public class WpfTools
     }
 
     [McpServerTool]
-    [Description("Set the text/value of a UI element (TextBox, ComboBox, etc.). By default uses UI Automation IValueProvider.SetValue (clean, no focus needed, raises proper events). Falls back to setting TextBox.Text or PasswordBox.Password directly, or a reflected string 'Text' property. Set physical=true to focus the element and type via OS keyboard input (clears existing text with Ctrl+A/Delete first, then types each character; moves window focus; on a composite control it types into the inner text box; nothing is typed unless the application owns the foreground). Focus stays in the field, so a binding that updates on LostFocus (the TextBox default) keeps its old source value until focus leaves: the result says so. commit=true (any mode) then leaves the field as Tab would, writes bindings still holding the value, and reports the bound source values and validation errors ('committed: ...; source Amount = '12,50''): use it when the value must reach the view model, e.g. before saving. STATE-CHANGING." + InputTargetDescription)]
+    [Description("Set the text/value of a UI element (TextBox, ComboBox, etc.). By default uses UI Automation IValueProvider.SetValue (clean, no focus needed, raises proper events). Falls back to setting TextBox.Text or PasswordBox.Password directly, or a reflected string 'Text' property. Set physical=true to focus the element and type via OS keyboard input (clears existing text with Ctrl+A/Delete first, then types each character; moves window focus; on a composite control it types into the inner text box; nothing is typed unless the application owns the foreground). Focus stays in the field, so a binding that updates on LostFocus (the TextBox default) keeps its old source value until focus leaves: the result says so. commit=true (any mode) then enters the field if focus is elsewhere (activating the window) and leaves it as Tab would, so the application's own LostFocus formatting and validation run; it writes bindings still holding the value, and reports the bound source values and validation errors ('committed: ...; source Amount = '12,50''): use it when the value must reach the view model, e.g. before saving. STATE-CHANGING." + InputTargetDescription)]
     public async Task<object> WpfSetText(string text, string? element_handle = null, bool physical = false,
         string? automation_id = null, string? root_handle = null, bool commit = false)
     {

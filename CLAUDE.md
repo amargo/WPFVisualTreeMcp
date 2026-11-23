@@ -163,6 +163,11 @@ Target WPF Application (.NET Framework)
   attaches; it never kills the process. `LaunchRefusal` allows only local WPF executables (assembly references
   PresentationFramework) outside the Windows directory and refuses shells/command hosts: the tool must not become a command runner. Window waits poll the list from the server side.
 
+### Unknown parameters
+- `ToolArgumentGuard` (an `AddCallToolFilter`) rejects MCP arguments missing from the tool's input schema,
+  suggesting the meant name; `CliRunner.UnknownOptionError` does the same for CLI options, taking the allowed
+  options from the command's help text, so every option a command reads must appear in its help.
+
 ### Native dialogs
 - `wpf_native_dialog` / CLI `dialog` (`NativeDialogs.cs`) list and answer Win32 `#32770` windows of
   the process (MessageBox). Pure Win32, handled at the top of `HandleRequestAsync` before the

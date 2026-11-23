@@ -69,6 +69,28 @@ public class SetTextCommitTests
     });
 
     [Fact]
+    public Task Commit_enters_and_leaves_the_field_so_the_application_formats_it() => DiagnosticReporterTests.OnSta(() =>
+    {
+        var invoice = new Invoice();
+        // Like KUR's CustomTextBox date field: the text is normalised when the editor loses keyboard focus.
+        var date = new TextBox();
+        date.SetBinding(TextBox.TextProperty, new Binding(nameof(Invoice.Partner)));
+        date.PreviewLostKeyboardFocus += (_, e) => { if (ReferenceEquals(e.OriginalSource, date) && date.Text == "1231") date.Text = "2026.12.31."; };
+        var (window, _) = Show(invoice, date, new TextBox());
+        try
+        {
+            window.Activate();
+            new ControlInteractor().SetText(date, "1231", physical: false);
+            date.IsKeyboardFocusWithin.Should().BeFalse("UI Automation writes without focus");
+
+            var detail = ControlInteractor.CommitText(date, "1231", physical: false, force: false);
+            invoice.Partner.Should().Be("2026.12.31.");
+            detail.Should().Contain("focus moved on").And.Contain("the field now shows '2026.12.31.'").And.Contain("Partner = '2026.12.31.'");
+        }
+        finally { window.Close(); }
+    });
+
+    [Fact]
     public Task Commit_reaches_the_binding_of_a_composite_control_through_its_inner_editor() => DiagnosticReporterTests.OnSta(() =>
     {
         var invoice = new Invoice();

@@ -118,7 +118,7 @@ public interface IIpcBridge
     /// ("visible", "exists", "enabled", or "hidden") or the timeout elapses.
     /// </summary>
     Task<WaitForResult> WaitForElementAsync(string? rootHandle, string? typeName, string? elementName,
-        string? text, string condition, int timeoutMs, int pollIntervalMs, string? automationId = null);
+        string? text, string condition, int timeoutMs, int pollIntervalMs, string? automationId = null, bool afterChange = false);
 
     /// <summary>
     /// Exports the visual tree in the specified format.

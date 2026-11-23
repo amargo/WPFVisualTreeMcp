@@ -479,7 +479,7 @@ public class WpfToolsTests
             WaitedMs = 480
         };
         _ipcBridgeMock
-            .Setup(x => x.WaitForElementAsync(null, "Button", null, "Save", "enabled", 5000, 100, null))
+            .Setup(x => x.WaitForElementAsync(null, "Button", null, "Save", "enabled", 5000, 100, null, false))
             .ReturnsAsync(expected);
 
         // Act
@@ -494,7 +494,7 @@ public class WpfToolsTests
             matched_handle = "elem_00000005",
             element_type = "System.Windows.Controls.Button"
         });
-        _ipcBridgeMock.Verify(x => x.WaitForElementAsync(null, "Button", null, "Save", "enabled", 5000, 100, null), Times.Once);
+        _ipcBridgeMock.Verify(x => x.WaitForElementAsync(null, "Button", null, "Save", "enabled", 5000, 100, null, false), Times.Once);
     }
 
     [Fact]

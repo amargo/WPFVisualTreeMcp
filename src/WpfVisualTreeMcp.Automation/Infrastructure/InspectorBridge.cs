@@ -478,9 +478,12 @@ public partial class InspectorBridge : IIpcBridge
     }
 
     public async Task<WaitForResult> WaitForElementAsync(string? rootHandle, string? typeName, string? elementName,
-        string? text, string condition, int timeoutMs, int pollIntervalMs, string? automationId = null)
+        string? text, string condition, int timeoutMs, int pollIntervalMs, string? automationId = null, bool afterChange = false)
     {
         var session = EnsureConnected();
+        // An older Inspector would ignore the flag and match the previous state at once.
+        if (afterChange && await InspectorLevelAsync(session.ProcessId) < 12)
+            throw CreateException("after_change needs a newer Inspector than the one loaded in the attached app. Save your work, restart the app and reattach.");
 
         var request = new WaitForElementRequest
         {
@@ -491,7 +494,8 @@ public partial class InspectorBridge : IIpcBridge
             Text = text,
             Condition = condition,
             TimeoutMs = timeoutMs,
-            PollIntervalMs = pollIntervalMs
+            PollIntervalMs = pollIntervalMs,
+            AfterChange = afterChange
         };
 
         await ValidateAutomationIdAsync(session.ProcessId, automationId);
@@ -509,7 +513,9 @@ public partial class InspectorBridge : IIpcBridge
             Matched = response.Matched,
             MatchedHandle = response.MatchedHandle,
             ElementType = response.ElementType,
-            WaitedMs = response.WaitedMs
+            WaitedMs = response.WaitedMs,
+            AlreadyMet = response.AlreadyMet,
+            Changed = response.Changed
         };
     }
 

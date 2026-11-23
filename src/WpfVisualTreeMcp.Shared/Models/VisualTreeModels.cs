@@ -171,6 +171,12 @@ public class WaitForResult
 
     /// <summary>How long the wait actually took, in milliseconds.</summary>
     public int WaitedMs { get; set; }
+
+    /// <summary>The condition already held when the wait started.</summary>
+    public bool AlreadyMet { get; set; }
+
+    /// <summary>With after-change: the condition stopped holding during the wait before it was met.</summary>
+    public bool Changed { get; set; }
 }
 
 /// <summary>

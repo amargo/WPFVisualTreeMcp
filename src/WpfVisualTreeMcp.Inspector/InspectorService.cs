@@ -1118,6 +1118,8 @@ public partial class InspectorService : IDisposable
         };
 
         var start = DateTime.UtcNow;
+        bool? alreadyMet = null;
+        var changed = false;
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -1130,8 +1132,12 @@ public partial class InspectorService : IDisposable
 
             var satisfied = condition == "hidden" ? hit == null : hit != null;
             var elapsed = (int)(DateTime.UtcNow - start).TotalMilliseconds;
+            alreadyMet ??= satisfied;
+            // A state that already held may be the previous one (a status text before a reload):
+            // with AfterChange it counts only once it has stopped holding in between.
+            if (!satisfied) changed = true;
 
-            if (satisfied)
+            if (satisfied && (!request.AfterChange || changed))
             {
                 return new WaitForElementResponse
                 {
@@ -1139,7 +1145,9 @@ public partial class InspectorService : IDisposable
                     Matched = true,
                     MatchedHandle = hit?.Handle,
                     ElementType = hit?.TypeName,
-                    WaitedMs = elapsed
+                    WaitedMs = elapsed,
+                    AlreadyMet = alreadyMet.Value,
+                    Changed = request.AfterChange && changed
                 };
             }
 
@@ -1149,7 +1157,9 @@ public partial class InspectorService : IDisposable
                 {
                     RequestId = request.RequestId,
                     Matched = false,
-                    WaitedMs = elapsed
+                    WaitedMs = elapsed,
+                    AlreadyMet = alreadyMet.Value,
+                    Changed = changed
                 };
             }
 

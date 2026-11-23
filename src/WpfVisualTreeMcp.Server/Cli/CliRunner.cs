@@ -35,7 +35,7 @@ public static class CliRunner
     /// <summary>Options that never take a value (presence alone is meaningful).</summary>
     private static readonly HashSet<string> KnownFlags = new(StringComparer.OrdinalIgnoreCase)
     {
-        "auto-inject", "no-inject", "commit", "compact", "outline", "short-path", "on-screen", "has-text", "verbose", "physical", "horizontal", "visible-only", "full-content", "all", "help", "h", "check", "status",
+        "auto-inject", "no-inject", "commit", "after-change", "compact", "outline", "short-path", "on-screen", "has-text", "verbose", "physical", "horizontal", "visible-only", "full-content", "all", "help", "h", "check", "status",
     };
 
     private static string Exe =>
@@ -85,6 +85,8 @@ public static class CliRunner
 
         try
         {
+            if (UnknownOptionError(command, cli.Options.Keys.Concat(cli.Flags)) is { } unknownOption)
+                throw new ArgumentException(unknownOption);
             switch (command)
             {
                 case "update":
@@ -463,11 +465,18 @@ public static class CliRunner
                     var automationId = cli.GetStringOrNull("automation-id");
                     if (string.IsNullOrEmpty(type) && string.IsNullOrEmpty(name) && string.IsNullOrEmpty(text) && automationId == null)
                         throw new ArgumentException("wait-for requires --type, --name, --text or --automation-id to identify the element.");
-                    WriteJson(await bridge.WaitForElementAsync(
+                    var afterChange = cli.Flags.Contains("after-change");
+                    var waited = await bridge.WaitForElementAsync(
                         cli.GetStringOrNull("root"), type, name, text,
                         cli.GetString("condition", "visible"),
                         cli.GetInt("timeout", 10000),
-                        cli.GetInt("poll", 250), automationId), cli);
+                        cli.GetInt("poll", 250), automationId, afterChange);
+                    WriteJson(new
+                    {
+                        waited.Matched, waited.MatchedHandle, waited.ElementType, waited.WaitedMs,
+                        AlreadyMet = waited.AlreadyMet ? true : (bool?)null,
+                        Note = WpfTools.WaitNote(waited, afterChange)
+                    }, cli);
                     break;
                 }
 
@@ -818,9 +827,8 @@ TYPICAL WORKFLOW
 ");
     }
 
-    private static void PrintCommandHelp(string command)
-    {
-        var usage = command switch
+    /// <summary>The per-command help text; also the list of options a command accepts.</summary>
+    internal static string? CommandUsage(string command) => command switch
         {
             "update" => "update [--check | --status]\n"
                       + "  Update this installation to the latest stable release. No PID required.\n"
@@ -872,7 +880,7 @@ TYPICAL WORKFLOW
                       + "  Aggregate current binding/validation errors and UI state counts.\n"
                       + "  Defaults: 500 elements, depth 25, 100 findings. Reports truncation.\n"
                       + "  Recent binding traces are process-wide history; state counts are not defects.",
-            "record" => "record start|stop|status|clear --pid <id> [--name N]\n"
+            "record" => "record start|stop|status|clear --pid <id> [--name N] (or --action start|stop|status|clear)\n"
                       + "  Record sequential actions, finds, successful waits and assertions using stable selectors.\n"
                       + "  Storage lives in the target process. Stop/export before clear. Limit: 100 steps.",
             "get-recording" => "get-recording --pid <id> [--out workflow.json]\n"
@@ -904,7 +912,7 @@ TYPICAL WORKFLOW
                     + "  --filter: JSON object of property=value pairs, e.g. '{\"IsEnabled\":\"True\"}'\n"
                     + "  Results include text, automationId, isVisible/isEnabled and screenBounds.\n"
                     + "  Example: find --pid 1234 --type Button --text Save --visible-only",
-            "find-deep" => "find-deep --pid <id> (--type T | --name N | --text S | --automation-id ID) [--visible-only] [--root H] [--filter JSON]\n"
+            "find-deep" => "find-deep --pid <id> (--type T | --name N | --text S | --automation-id ID) [--visible-only] [--on-screen] [--has-text] [--short-path] [--root H] [--filter JSON]\n"
                          + "  Unbounded search; requires --type, --name, --text or --automation-id. Same filters as 'find'.",
             "bindings" => "bindings --pid <id> --handle <handle>\n  Show data bindings and their status for an element.",
             "binding-errors" => "binding-errors --pid <id>\n  List binding errors captured since the app started.",
@@ -976,13 +984,15 @@ TYPICAL WORKFLOW
                          + "        Delete, Insert, Home, End, PageUp, PageDown, Up/Down/Left/Right.\n"
                          + "  Examples: 'Ctrl+S', 'Ctrl+Shift+F', 'Enter', 'F5', 'Alt+F4', 'Win+R'.\n"
                          + "  This command CHANGES application state.",
-            "wait-for" => "wait-for --pid <id> (--type T | --name N | --text S | --automation-id ID) [--condition visible|exists|enabled|hidden] [--timeout <ms>] [--poll <ms>]\n"
+            "wait-for" => "wait-for --pid <id> (--type T | --name N | --text S | --automation-id ID) [--root H] [--condition visible|exists|enabled|hidden] [--timeout <ms>] [--poll <ms>] [--after-change]\n"
                         + "  Poll in the target app until an element matching the criteria satisfies\n"
                         + "  the condition, instead of sleep-and-retry. Conditions:\n"
                         + "    visible (default) - element exists and is on screen\n"
                         + "    exists            - in the tree even if not visible\n"
                         + "    enabled           - visible and IsEnabled=true\n"
                         + "    hidden            - no matching visible element (e.g. a spinner cleared)\n"
+                        + "  --after-change: if the condition already holds at the start (a status text\n"
+                        + "  from before a reload), first wait until it stops holding, then until it holds.\n"
                         + "  --timeout defaults to 10000 (max 25000); --poll defaults to 250.\n"
                         + "  Returns matched (bool), waitedMs, and matchedHandle/elementType when found.",
             "set-property" => "set-property --pid <id> (--handle H | --automation-id ID [--root H]) --property <name> --value <value>\n"
@@ -1039,7 +1049,7 @@ TYPICAL WORKFLOW
                           + "  --min-rows / --contains-text wait (up to --timeout, default 5000, max 25000 ms)\n"
                           + "  until the grid has that many rows and/or a returned cell contains the text;\n"
                           + "  a grid that does not exist yet counts as not ready. Exit code 1 on timeout.",
-            "screenshot" => "screenshot --pid <id> [--handle <handle>] [--out <file>] [--max-width N] [--max-height N] [--mode auto|render|screen] [--full-content]\n"
+            "screenshot" => "screenshot --pid <id> [--handle <handle> | --automation-id ID [--root H]] [--out <file>] [--max-width N] [--max-height N] [--mode auto|render|screen] [--full-content]\n"
                            + "  Capture the window (or one element) as PNG and print the file path.\n"
                            + "  Output is downscaled to fit 1280x800 by default; pass --handle to capture one\n"
                            + "  element, or raise --max-width/--max-height (up to 3840x2160) for small text.\n"
@@ -1057,6 +1067,28 @@ TYPICAL WORKFLOW
             _ => null,
         };
 
+    private static readonly string[] CommonOptions = { "pid", "process", "compact", "verbose", "help", "h" };
+
+    /// <summary>
+    /// The error for options the command does not take, or null. Unknown options used to be ignored,
+    /// so a misspelled filter widened a search and a misspelled target acted on something else.
+    /// </summary>
+    internal static string? UnknownOptionError(string command, IEnumerable<string> given)
+    {
+        if (command == "update" || CommandUsage(command) is not { } usage) return null;
+        var known = System.Text.RegularExpressions.Regex.Matches(usage, @"--([a-z][a-z0-9-]*)")
+            .Select(m => m.Groups[1].Value).Concat(CommonOptions).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        var unknown = given.Where(option => !known.Contains(option, StringComparer.OrdinalIgnoreCase)).ToList();
+        if (unknown.Count == 0) return null;
+        var parts = unknown.Select(option => ToolArgumentGuard.Suggest(option, known) is { } meant
+            ? $"--{option} (did you mean --{meant}?)" : $"--{option}");
+        return $"Unknown option{(unknown.Count > 1 ? "s" : "")} {string.Join(", ", parts)} for '{command}'; nothing was done. "
+             + $"Options: {string.Join(", ", known.Select(k => "--" + k))}. See '{command} --help'.";
+    }
+
+    private static void PrintCommandHelp(string command)
+    {
+        var usage = CommandUsage(command);
         if (usage is null)
         {
             PrintGeneralHelp();
