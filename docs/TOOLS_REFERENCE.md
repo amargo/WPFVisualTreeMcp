@@ -227,8 +227,9 @@ Returns `process_id`, `startup_ms`, the Inspector status and `windows`. The firs
 often a splash or login window: wait for the one you need with `wpf_window`. The server
 never stops the process, also not after a startup error. **Starts a program.**
 
-Only .NET applications are started (a managed `.exe`, or a .NET 5+ host next to its managed
-`.dll` and `.runtimeconfig.json`). Programs in the Windows directory and shells or command hosts
+Only WPF applications on a local drive are started: a managed `.exe`, or a .NET 5+ host next to its
+managed `.dll` and `.runtimeconfig.json`, whose assembly references `PresentationFramework`.
+UNC, device and network-drive paths, programs in the Windows directory and shells or command hosts
 (`cmd`, `powershell`, `pwsh`, `wscript`, `mshta`, `rundll32`, `dotnet`, ...) are refused, so the
 tool cannot be used to run arbitrary commands.
 

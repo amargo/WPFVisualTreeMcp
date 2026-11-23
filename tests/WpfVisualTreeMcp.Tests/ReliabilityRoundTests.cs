@@ -121,17 +121,22 @@ public class ReliabilityRoundTests
         var dir = Directory.CreateDirectory(Path.Combine(Path.GetTempPath(), "launch-" + Guid.NewGuid().ToString("N"))).FullName;
         try
         {
+            // The Inspector references PresentationFramework like any WPF application; this test assembly does not.
+            var wpf = Path.Combine(AppContext.BaseDirectory, "native", "x64", "WpfVisualTreeMcp.Inspector.dll");
             var managed = typeof(ReliabilityRoundTests).Assembly.Location;
             string Copy(string from, string name) { var to = Path.Combine(dir, name); File.Copy(from, to); return to; }
 
-            AppWindows.LaunchRefusal(Copy(managed, "Kur.Main.exe")).Should().BeNull("a .NET Framework app is a managed exe");
-            AppWindows.LaunchRefusal(Copy(managed, "pwsh.exe")).Should().Contain("shell");
+            AppWindows.LaunchRefusal(Copy(wpf, "Kur.Main.exe")).Should().BeNull("a .NET Framework WPF app is a managed exe");
+            AppWindows.LaunchRefusal(Copy(managed, "Console.exe")).Should().Contain("not a WPF application", "a console or script host does not reference WPF");
+            AppWindows.LaunchRefusal(Copy(wpf, "pwsh.exe")).Should().Contain("shell");
             AppWindows.LaunchRefusal(Copy(Path.Combine(system, "cmd.exe"), "tool.exe")).Should().Contain("not a .NET application");
+            AppWindows.LaunchRefusal(@"\\server\share\App.exe").Should().Contain("not a local path");
+            AppWindows.LaunchRefusal(@"\\?\" + Path.Combine(dir, "Kur.Main.exe")).Should().Contain("not a local path");
 
             // .NET 5+: native apphost next to the managed dll and its runtimeconfig.
             var host = Copy(Path.Combine(system, "cmd.exe"), "App.exe");
             AppWindows.LaunchRefusal(host).Should().Contain("not a .NET application");
-            Copy(managed, "App.dll");
+            Copy(wpf, "App.dll");
             File.WriteAllText(Path.Combine(dir, "App.runtimeconfig.json"), "{}");
             AppWindows.LaunchRefusal(host).Should().BeNull();
         }

@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Reflection.Metadata;
 using System.Reflection.PortableExecutable;
 using WpfVisualTreeMcp.Automation.Infrastructure;
 using WpfVisualTreeMcp.Shared.Ipc;
@@ -123,16 +124,27 @@ internal static class AppWindows
     private static readonly string[] CommandHosts =
     {
         "cmd", "powershell", "powershell_ise", "pwsh", "wscript", "cscript", "mshta", "rundll32", "regsvr32",
-        "msiexec", "wsl", "bash", "sh", "conhost", "wt", "dotnet", "msbuild", "installutil", "regasm", "regsvcs"
+        "msiexec", "wsl", "bash", "sh", "conhost", "wt", "dotnet", "msbuild", "installutil", "regasm", "regsvcs",
+        "csi", "csc", "vbc", "fsi", "fsc", "dotnet-script", "vstest.console", "testhost"
     };
 
     /// <summary>
-    /// Why <paramref name="file"/> may not be launched, or null. Launch is limited to .NET applications
-    /// outside the Windows directory and never starts a shell or script host: the tool is reachable by
-    /// an agent whose instructions may come from text it read, so it must not run arbitrary commands.
+    /// Why <paramref name="file"/> may not be launched, or null. Launch is limited to local WPF
+    /// applications (the program's managed assembly references PresentationFramework) outside the
+    /// Windows directory, and never starts a shell or script host: the tool is reachable by an agent
+    /// whose instructions may come from text it read, so it must not run arbitrary commands.
     /// </summary>
     internal static string? LaunchRefusal(string file)
     {
+        // Device (\\?\, \\.\) and UNC paths could point anywhere, including a network share.
+        if (file.StartsWith(@"\\", StringComparison.Ordinal) || !Path.IsPathFullyQualified(file))
+            return $"'{file}' is not a local path; only applications on a local drive can be launched.";
+        try
+        {
+            if (new DriveInfo(Path.GetPathRoot(file)!).DriveType is not (DriveType.Fixed or DriveType.Removable))
+                return $"'{file}' is not on a local drive; only applications on a local drive can be launched.";
+        }
+        catch (ArgumentException) { return $"'{file}' is not on a local drive."; }
         if (!File.Exists(file) || !file.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
             return $"'{file}' is not an existing .exe file.";
         var windows = Environment.GetFolderPath(Environment.SpecialFolder.Windows);
@@ -143,19 +155,28 @@ internal static class AppWindows
             return $"'{name}' is a shell or command host; only WPF applications can be launched.";
         // .NET Framework apps are managed .exe files; .NET Core/5+ apps are a native host next to a managed .dll.
         var hostedDll = Path.ChangeExtension(file, ".dll");
-        if (!IsManaged(file) && !(IsManaged(hostedDll) && File.Exists(Path.ChangeExtension(file, ".runtimeconfig.json"))))
-            return $"'{file}' is not a .NET application; only WPF applications can be launched.";
+        var assembly = IsManaged(file) ? file
+            : IsManaged(hostedDll) && File.Exists(Path.ChangeExtension(file, ".runtimeconfig.json")) ? hostedDll : null;
+        if (assembly == null) return $"'{file}' is not a .NET application; only WPF applications can be launched.";
+        if (!ReferencesWpf(assembly))
+            return $"'{file}' is not a WPF application (it does not reference PresentationFramework).";
         return null;
     }
 
-    private static bool IsManaged(string file)
+    private static bool IsManaged(string file) => ReadMetadata(file, _ => true);
+
+    private static bool ReferencesWpf(string file) => ReadMetadata(file, metadata =>
+        metadata.AssemblyReferences.Any(handle =>
+            metadata.GetString(metadata.GetAssemblyReference(handle).Name) == "PresentationFramework"));
+
+    private static bool ReadMetadata(string file, Func<MetadataReader, bool> check)
     {
         try
         {
             if (!File.Exists(file)) return false;
             using var stream = File.OpenRead(file);
             using var reader = new PEReader(stream);
-            return reader.PEHeaders.CorHeader != null;
+            return reader.HasMetadata && check(reader.GetMetadataReader());
         }
         catch (Exception) { return false; }
     }
