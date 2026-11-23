@@ -133,6 +133,47 @@ public class SetTextCommitTests
         finally { window.Close(); }
     });
 
+    [Fact]
+    public Task Text_a_composite_ignores_goes_into_its_inner_text_box_and_an_empty_field_is_never_committed() => DiagnosticReporterTests.OnSta(() =>
+    {
+        var invoice = new Invoice();
+        var template = new ControlTemplate(typeof(DeafInput));
+        var inner = new FrameworkElementFactory(typeof(TextBox));
+        inner.SetBinding(TextBox.TextProperty, new Binding(nameof(Invoice.Partner)));
+        template.VisualTree = inner;
+        var input = new DeafInput { Template = template };
+        var (window, _) = Show(invoice, input, new TextBox());
+        try
+        {
+            var outcome = new ControlInteractor().SetText(input, "Kovács Kft.", physical: false);
+            outcome.Detail.Should().Contain("written into its inner TextBox").And.Contain("value now: 'Kovács Kft.'");
+            ControlInteractor.CommitText(input, "Kovács Kft.", physical: false, force: false).Should().Contain("Partner = 'Kovács Kft.'");
+
+            // A field that did not take the text must not overwrite the source with its empty content.
+            var editor = (TextBox)ControlOperations.Descendants(input).First(d => d is TextBox);
+            editor.Text = string.Empty;
+            ControlInteractor.CommitText(input, "Other Bt.", physical: false, force: false).Should().StartWith("not committed");
+            invoice.Partner.Should().Be("Kovács Kft.");
+        }
+        finally { window.Close(); }
+    });
+
+    /// <summary>Exposes the Value pattern but drops what is written, like a composite that does not forward it.</summary>
+    public sealed class DeafInput : Control
+    {
+        protected override System.Windows.Automation.Peers.AutomationPeer OnCreateAutomationPeer() => new Peer(this);
+
+        private sealed class Peer : System.Windows.Automation.Peers.FrameworkElementAutomationPeer, System.Windows.Automation.Provider.IValueProvider
+        {
+            public Peer(DeafInput owner) : base(owner) { }
+            public override object? GetPattern(System.Windows.Automation.Peers.PatternInterface pattern) =>
+                pattern == System.Windows.Automation.Peers.PatternInterface.Value ? this : base.GetPattern(pattern);
+            public void SetValue(string value) { }
+            public string Value => string.Empty;
+            public bool IsReadOnly => false;
+        }
+    }
+
     public sealed class Wrapper : Control
     {
         public static readonly DependencyProperty TextProperty = DependencyProperty.Register(nameof(Text), typeof(string), typeof(Wrapper));

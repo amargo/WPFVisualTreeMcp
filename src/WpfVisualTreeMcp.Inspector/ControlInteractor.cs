@@ -302,6 +302,16 @@ internal sealed class ControlInteractor
             if (value.IsReadOnly)
                 throw new InvalidOperationException("Element value is read-only and cannot be set.");
             value.SetValue(text);
+            // Some composites (an AutoCompleteBox-based input) expose Value but do not pass it on to
+            // the text box inside, which is what the user types into and what the bindings follow.
+            if (value.Value != text && !IsEditor(element)
+                && ControlOperations.Descendants(element).OfType<TextBox>().FirstOrDefault(e => !e.IsReadOnly && e.IsEnabled && e.IsVisible) is { } inner
+                && UIElementAutomationPeer.CreatePeerForElement(inner)?.GetPattern(PatternInterface.Value) is IValueProvider innerValue)
+            {
+                innerValue.SetValue(text);
+                return new InteractionOutcome("ValueProvider.SetValue",
+                    $"the {element.GetType().Name} did not take the text, so it was written into its inner TextBox; " + ReadBackDetail(inner.Text, text));
+            }
             return new InteractionOutcome("ValueProvider.SetValue", ReadBackDetail(value.Value, text));
         }
 
@@ -400,6 +410,9 @@ internal sealed class ControlInteractor
             : IsEditor(element) ? element
             : ControlOperations.Descendants(element).OfType<UIElement>().FirstOrDefault(IsEditor);
         if (physical && !force && editor is TextBoxBase && EditorText(editor) != text) return null;
+        // Committing a field that did not take the text would write its old or empty content to the source.
+        if (!physical && editor is TextBoxBase && EditorText(editor) != text && !string.IsNullOrEmpty(text) && string.IsNullOrEmpty(EditorText(editor)))
+            return $"not committed: the field is empty, not '{text}', so nothing was written to the source; check the target (try the inner text box or physical=true)";
 
         var parts = new List<string>();
         // Applications format and validate in their LostFocus handlers, which run only for a field that

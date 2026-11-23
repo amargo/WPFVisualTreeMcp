@@ -45,6 +45,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Physical typing is committed once the typed text has arrived. A value written through UI Automation
   is first focused (activating the window), so the application's own LostFocus formatting and
   validation run; the result shows the reformatted text. Inspector feature level 10.
+- `wpf_set_text` writes into the inner TextBox when a composite (an AutoCompleteBox-based input)
+  exposes Value but does not take the text, and `commit` never writes an empty field over the source.
 - `wpf_window` / CLI `window`: list top-level WPF windows, wait for one to appear or close,
   and activate, minimize, maximize, restore or close one.
 - `wpf_native_dialog` / CLI `dialog`: list and answer native Win32 dialogs (MessageBox) of
