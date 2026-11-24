@@ -89,7 +89,7 @@ Without `--out`, export returns the file-name/content map as JSON.
 
 ### wpf_capture_screenshot
 
-Use `element_handle` to select a control, or omit it for the main window.
+Use `element_handle` to select a control, or omit it for the active window of the application (the main window when none is active).
 `mode="auto"` (default) selects screen capture when visible `HwndHost` content
 is present, otherwise render. The response includes the actual capture mode and
 explains any automatic switch. `mode="screen"` captures visible desktop pixels,

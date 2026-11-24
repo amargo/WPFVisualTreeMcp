@@ -45,6 +45,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Physical typing is committed once the typed text has arrived. A value written through UI Automation
   is first focused (activating the window), so the application's own LostFocus formatting and
   validation run; the result shows the reformatted text. Inspector feature level 10.
+- Physical `wpf_set_text` refuses to type when keyboard focus cannot be moved into the target
+  (a composite that hands focus away); it used to type into the previously focused field.
+- `wpf_select_item` matches virtualized items by their data (public text and number properties)
+  when their template text is not realized, and says so when nothing matches.
+- `wpf_capture_screenshot` without an element captures the active window, not the main window.
 - `wpf_set_text` writes into the inner TextBox when a composite (an AutoCompleteBox-based input)
   exposes Value but does not take the text, and `commit` never writes an empty field over the source.
 - `wpf_window` / CLI `window`: list top-level WPF windows, wait for one to appear or close,

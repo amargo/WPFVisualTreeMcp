@@ -1290,7 +1290,9 @@ public partial class InspectorService : IDisposable
         }
         else
         {
-            element = GetDefaultRoot() as UIElement;
+            // The window the user is working in, not the main window behind it.
+            element = (System.Linq.Enumerable.FirstOrDefault(System.Linq.Enumerable.OfType<Window>(Application.Current?.Windows ?? new WindowCollection()), w => w.IsActive && w.IsVisible)
+                ?? GetDefaultRoot()) as UIElement;
             if (element == null)
             {
                 return new CaptureScreenshotResponse

@@ -365,9 +365,20 @@ internal sealed class ControlInteractor
         // A composite control can take focus itself without passing it to its editor (it depends on
         // where focus was before); typed text then bypasses the editor's bindings. Text belongs in
         // the editor, so move there unless focus already is in an editor of this element.
-        if (!IsEditor(element) && !(Keyboard.FocusedElement is UIElement current && IsEditor(current) && IsWithin(current, element)))
-            ControlOperations.Descendants(element).OfType<UIElement>()
-                .FirstOrDefault(e => IsEditor(e) && e.Focusable && e.IsVisible && e.IsEnabled)?.Focus();
+        if (!IsEditor(element) && !(Keyboard.FocusedElement is UIElement current && IsEditor(current) && IsWithin(current, element))
+            && ControlOperations.Descendants(element).OfType<UIElement>()
+                .FirstOrDefault(e => IsEditor(e) && e.Focusable && e.IsVisible && e.IsEnabled) is { } editor)
+        {
+            editor.Focus();
+            // Some composites hand focus elsewhere on GotFocus; ask the keyboard directly once more.
+            if (!editor.IsKeyboardFocusWithin) Keyboard.Focus(editor);
+        }
+        // Typed keys go wherever keyboard focus is: never type while it is outside the target.
+        if (!(Keyboard.FocusedElement is DependencyObject inside && IsWithin(inside, element)))
+            throw new InvalidOperationException(
+                $"Keyboard focus could not be moved into the {element.GetType().Name} (it is on {(Keyboard.FocusedElement as DependencyObject)?.GetType().Name ?? "nothing"}" +
+                $"{((Keyboard.FocusedElement as FrameworkElement)?.Name is { Length: > 0 } n ? " '" + n + "'" : "")}); nothing was typed. " +
+                "Target the inner text box, click it physically first, or use the default UI Automation mode.");
         if (!PhysicalInputGuard.OwnsForeground())
             throw new InvalidOperationException(
                 "The attached application does not own the foreground, so typed text would go to another window; nothing was typed. " +
@@ -584,8 +595,12 @@ internal sealed class ControlInteractor
 
         var preview = string.Join(", ", Enumerable.Range(0, Math.Min(count, 10))
             .Select(j => $"'{DescribeItem(selector, j)}'"));
+        var unrealized = Enumerable.Range(0, count).Count(j => selector.ItemContainerGenerator.ContainerFromIndex(j) == null);
         throw new InvalidOperationException(
             $"No item matching '{itemText}' among {count} item(s). " +
+            (unrealized > 0 && !(selector is DataGrid)
+                ? $"{unrealized} of them are virtualized (not displayed), so they were matched against their data (public text and number properties), not their displayed template text; the item may still exist under another text: try index or a property value. "
+                : "") +
             $"First items: [{preview}{(count > 10 ? ", …" : "")}]");
     }
 
@@ -712,7 +727,27 @@ internal sealed class ControlInteractor
             }
         }
 
-        return str ?? item.GetType().Name;
+        // Still nothing: the item's own data (codes, captions, dates) is what its template shows.
+        return ItemDataText(item) ?? str ?? item.GetType().Name;
+    }
+
+    /// <summary>The item's public scalar property values ("Caption: B000709 | Date: …"), or null when it has none.</summary>
+    internal static string? ItemDataText(object item)
+    {
+        var values = new List<string>();
+        foreach (var property in item.GetType().GetProperties(BindingFlags.Public | BindingFlags.Instance))
+        {
+            if (values.Count >= 8 || property.GetIndexParameters().Length > 0 || !property.CanRead) continue;
+            var type = Nullable.GetUnderlyingType(property.PropertyType) ?? property.PropertyType;
+            if (!(type == typeof(string) || type.IsPrimitive || type.IsEnum || type == typeof(decimal) || type == typeof(DateTime))) continue;
+            object? value;
+            try { value = property.GetValue(item); } catch (Exception) { continue; }
+            var text = Convert.ToString(value, System.Globalization.CultureInfo.CurrentCulture);
+            if (!string.IsNullOrWhiteSpace(text)) values.Add($"{property.Name}: {text}");
+        }
+        if (values.Count == 0) return null;
+        var joined = string.Join(" | ", values);
+        return joined.Length > 160 ? joined.Substring(0, 160) + "…" : joined;
     }
 
     // ---------------------------------------------------------------------

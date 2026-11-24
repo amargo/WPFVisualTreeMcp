@@ -1050,7 +1050,7 @@ TYPICAL WORKFLOW
                           + "  until the grid has that many rows and/or a returned cell contains the text;\n"
                           + "  a grid that does not exist yet counts as not ready. Exit code 1 on timeout.",
             "screenshot" => "screenshot --pid <id> [--handle <handle> | --automation-id ID [--root H]] [--out <file>] [--max-width N] [--max-height N] [--mode auto|render|screen] [--full-content]\n"
-                           + "  Capture the window (or one element) as PNG and print the file path.\n"
+                           + "  Capture the active window (else the main window) or one element as PNG and print the file path.\n"
                            + "  Output is downscaled to fit 1280x800 by default; pass --handle to capture one\n"
                            + "  element, or raise --max-width/--max-height (up to 3840x2160) for small text.\n"
                            + "  --mode auto (default): screen for native HwndHost content, render otherwise.\n"
