@@ -854,7 +854,7 @@ internal sealed class ControlInteractor
     private static void EnsureInteractable(UIElement element, string action)
     {
         if (!element.IsEnabled)
-            throw new InvalidOperationException($"Element is disabled and cannot be {action}.");
+            throw new InvalidOperationException($"Element is disabled and cannot be {action}. Applications often disable controls while they load or save: wait with wpf_wait_for_element condition=enabled and retry.");
         if (!element.IsVisible)
             throw new InvalidOperationException($"Element is not visible and cannot be {action}.");
     }
