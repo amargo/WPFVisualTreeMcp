@@ -39,9 +39,13 @@ public partial class InspectorBridge
     {
         var processId = EnsureConnected().ProcessId;
         var capabilities = await SendRequestAsync<GetCapabilitiesRequest, GetCapabilitiesResponse>(processId, new());
-        if (!capabilities.Success || !capabilities.NativeDialogs)
-            throw CreateException("Native dialogs require a newer Inspector than the one loaded in the attached app. Restart the app and reattach using the updated server."
-                + (capabilities.Success ? "" : " (" + capabilities.Error + ")"));
+        // A failed handshake is not an old build: older Inspectors refuse it while the application shuts down.
+        if (!capabilities.Success)
+            throw CreateException(capabilities.Error?.Contains("Application.Current is null") == true
+                ? "The application is shutting down (Application.Current is null), so its dialogs can no longer be read. Wait for the process to exit or check it with wpf_list_processes."
+                : "The Inspector did not answer the capability check: " + capabilities.Error);
+        if (!capabilities.NativeDialogs)
+            throw CreateException("Native dialogs require a newer Inspector than the one loaded in the attached app. Restart the app and reattach using the updated server.");
         // An older Inspector would ignore the text and press the button anyway.
         if (fieldText != null && capabilities.FeatureLevel < 11)
             throw CreateException("Writing a dialog field needs a newer Inspector than the one loaded in the attached app. Restart the app and reattach.");

@@ -229,10 +229,13 @@ public partial class InspectorService : IDisposable
                 }).ConfigureAwait(false);
             }
 
+            // Constant and Dispatcher-free: answers while the application shuts down, so callers can tell that from an old build.
+            if (requestType == "GetCapabilities") return Capabilities();
+
             if (Application.Current == null)
             {
                 DebugLog("ERROR: Application.Current is NULL!");
-                return new GetVisualTreeResponse { Success = false, Error = "Application.Current is null" };
+                return new GetVisualTreeResponse { Success = false, Error = ShuttingDown };
             }
 
             var fullContent = requestType == "CaptureScreenshot" &&
@@ -377,11 +380,20 @@ public partial class InspectorService : IDisposable
     internal static string GetTimeoutErrorMessage(TimeoutException exception) =>
         exception is FullContentCaptureTimeoutException ? exception.Message : "Request timeout: UI thread is busy";
 
+    private static GetCapabilitiesResponse Capabilities() => new()
+    {
+        CoordinatePointerInput = true, AutomationIdTargeting = true, AutomationIdOptionalResolution = true, AdvancedAutomation = true,
+        PropertySubscriptions = true, GridRead = true, NativeDialogs = true, AutomationIdNameFallback = true, FeatureLevel = InspectorFeatures.Level
+    };
+
+    internal const string ShuttingDown = "The application is shutting down: its WPF Application has ended (Application.Current is null). "
+        + "Only wpf_native_dialog still works until the process exits.";
+
     private IpcResponse HandleRequest(string requestType, JsonElement data, CancellationToken captureToken)
     {
         return requestType switch
         {
-            "GetCapabilities" => new GetCapabilitiesResponse { CoordinatePointerInput = true, AutomationIdTargeting = true, AutomationIdOptionalResolution = true, AdvancedAutomation = true, PropertySubscriptions = true, GridRead = true, NativeDialogs = true, AutomationIdNameFallback = true, FeatureLevel = InspectorFeatures.Level },
+            "GetCapabilities" => Capabilities(),
             "ResolveAutomationId" => HandleResolveAutomationId(data),
             "Record" => HandleRecord(data),
             "AssertElement" => HandleAssertElement(data),

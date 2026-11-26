@@ -27,7 +27,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `scripts/Deploy-Local.ps1` rebuilds the Release server while it is in use.
 - `wpf_native_dialog` lists editable fields of a dialog; `text` (+ `field`) / CLI `dialog --text
   [--field]` fills one before `answer` is pressed, e.g. the file name of a Save As or Open dialog.
-  No keyboard input. Inspector feature level 11.
+  No keyboard input. Inspector feature level 11. Split buttons are listed too, so the Open button
+  of a file dialog can be pressed; while the application shuts down the tool says so instead of
+  reporting an outdated Inspector.
 - `wpf_native_dialog` `wait_ms` / CLI `dialog --wait`: wait for a dialog that an asynchronous
   operation opens later (listing), or for a follow-up dialog after an answer.
 - `wpf_launch` / CLI `launch`: start an application by its `.exe` path, wait for its first

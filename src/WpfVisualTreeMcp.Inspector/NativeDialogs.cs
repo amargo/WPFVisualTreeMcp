@@ -126,13 +126,13 @@ internal static class NativeDialogs
             var style = GetWindowLong(child, GWL_STYLE);
             if (type == "Button")
             {
-                // Push buttons only: check boxes, radio buttons and group boxes do not answer a dialog.
+                // Push, split (a file dialog's Open) and command-link buttons only: check boxes, radio buttons and group boxes do not answer a dialog.
                 var kind = style & 0xF;
-                if (kind is BS_PUSHBUTTON or BS_DEFPUSHBUTTON or BS_COMMANDLINK or BS_DEFCOMMANDLINK)
+                if (kind is BS_PUSHBUTTON or BS_DEFPUSHBUTTON or BS_SPLITBUTTON or BS_DEFSPLITBUTTON or BS_COMMANDLINK or BS_DEFCOMMANDLINK)
                     info.Buttons.Add(new NativeDialogButton
                     {
                         Handle = child.ToInt64(), Id = GetDlgCtrlID(child), Text = Caption(text),
-                        IsEnabled = IsWindowEnabled(child), IsDefault = kind is BS_DEFPUSHBUTTON or BS_DEFCOMMANDLINK
+                        IsEnabled = IsWindowEnabled(child), IsDefault = kind is BS_DEFPUSHBUTTON or BS_DEFSPLITBUTTON or BS_DEFCOMMANDLINK
                     });
             }
             else if (type == "Edit" && (style & ES_READONLY) == 0)
@@ -201,7 +201,7 @@ internal static class NativeDialogs
     private const int ES_READONLY = 0x0800;
     private const uint WM_COMMAND = 0x0111, WM_SETTEXT = 0x000C, WM_GETTEXT = 0x000D, WM_GETTEXTLENGTH = 0x000E;
     private const uint SMTO_ABORTIFHUNG = 0x0002;
-    private const int BS_PUSHBUTTON = 0x0, BS_DEFPUSHBUTTON = 0x1, BS_COMMANDLINK = 0xE, BS_DEFCOMMANDLINK = 0xF;
+    private const int BS_PUSHBUTTON = 0x0, BS_DEFPUSHBUTTON = 0x1, BS_SPLITBUTTON = 0xC, BS_DEFSPLITBUTTON = 0xD, BS_COMMANDLINK = 0xE, BS_DEFCOMMANDLINK = 0xF;
 
     private delegate bool WindowCallback(IntPtr window, IntPtr parameter);
     [DllImport("user32.dll")] private static extern bool EnumWindows(WindowCallback callback, IntPtr parameter);
