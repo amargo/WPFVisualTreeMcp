@@ -28,14 +28,14 @@ public static class CliRunner
         "binding-errors", "clear-binding-errors", "data-context", "resources",
         "styles", "watch-property", "highlight", "click", "move-mouse", "scroll", "drag", "touch", "select-item", "set-text",
         "send-keys", "wait-for", "set-property", "revert-property", "snapshot", "diff",
-        "evaluate-binding", "explain-triggers", "layout", "export", "screenshot",
-        "record", "get-recording", "assert", "replay", "export-test",
+        "evaluate-binding", "explain-triggers", "layout", "export", "screenshot", "read-grid",
+        "record", "get-recording", "assert", "replay", "export-test", "edit-cell", "dialog", "launch", "window",
     };
 
     /// <summary>Options that never take a value (presence alone is meaningful).</summary>
     private static readonly HashSet<string> KnownFlags = new(StringComparer.OrdinalIgnoreCase)
     {
-        "auto-inject", "compact", "verbose", "physical", "horizontal", "visible-only", "full-content", "all", "help", "h", "check", "status",
+        "auto-inject", "no-inject", "commit", "after-change", "compact", "outline", "short-path", "on-screen", "has-text", "verbose", "physical", "horizontal", "visible-only", "full-content", "all", "help", "h", "check", "status",
     };
 
     private static string Exe =>
@@ -54,6 +54,11 @@ public static class CliRunner
     /// <summary>Runs a single CLI command and returns the process exit code.</summary>
     public static async Task<int> RunAsync(string[] args)
     {
+        // stdout JSON and stderr text must share one encoding: with the console code page
+        // (e.g. CP852) a redirected "2>&1" stream mixes encodings and breaks UTF-8 readers.
+        try { Console.OutputEncoding = new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false); }
+        catch (Exception ex) when (ex is System.IO.IOException or System.Security.SecurityException) { }
+
         var command = args[0].TrimStart('-').ToLowerInvariant();
         var cli = CliArgs.Parse(args.Skip(1).ToArray(), KnownFlags);
 
@@ -80,6 +85,8 @@ public static class CliRunner
 
         try
         {
+            if (UnknownOptionError(command, cli.Options.Keys.Concat(cli.Flags)) is { } unknownOption)
+                throw new ArgumentException(unknownOption);
             switch (command)
             {
                 case "update":
@@ -103,6 +110,7 @@ public static class CliRunner
                 case "attach":
                 {
                     var session = await AttachAsync(processManager, cli, cli.Flags.Contains("auto-inject"));
+                    var compatibility = session.InspectorReady ? await bridge.GetCompatibilityNoteAsync(session.ProcessId) : null;
                     WriteJson(new
                     {
                         success = session.InspectorReady,
@@ -111,6 +119,7 @@ public static class CliRunner
                         mainWindowHandle = session.MainWindowHandle,
                         inspectorStatus = session.InspectorStatus,
                         inspectorReady = session.InspectorReady,
+                        inspectorCompatibility = compatibility ?? (session.InspectorReady ? "Inspector matches this server build." : null),
                     }, cli);
                     return session.InspectorReady ? 0 : 1;
                 }
@@ -194,7 +203,9 @@ public static class CliRunner
                 {
                     await AttachAsync(processManager, cli, false);
                     var depth = Math.Clamp(cli.GetInt("depth", 25), 1, 100);
-                    WriteJson(await bridge.GetVisualTreeAsync(cli.GetStringOrNull("root"), depth), cli);
+                    var tree = await bridge.GetVisualTreeAsync(cli.GetStringOrNull("root"), depth);
+                    if (cli.Flags.Contains("outline")) Console.Out.WriteLine(WpfTools.TreeOutline(tree));
+                    else WriteJson(tree, cli);
                     break;
                 }
 
@@ -213,9 +224,10 @@ public static class CliRunner
                         cli.GetStringOrNull("type"),
                         cli.GetStringOrNull("name"),
                         cli.GetStringOrNull("text"),
-                        ParseFilter(cli.GetStringOrNull("filter")),
+                        WpfTools.WithStateFilters(ParseFilter(cli.GetStringOrNull("filter")), cli.Flags.Contains("on-screen"), cli.Flags.Contains("has-text")),
                         cli.Flags.Contains("visible-only"),
                         cli.GetInt("max", 50), cli.GetStringOrNull("automation-id"));
+                    if (cli.Flags.Contains("short-path")) WpfTools.ShortenPaths(result);
                     WriteJson(result, cli);
                     break;
                 }
@@ -229,10 +241,12 @@ public static class CliRunner
                     var automationId = cli.GetStringOrNull("automation-id");
                     if (string.IsNullOrEmpty(type) && string.IsNullOrEmpty(name) && string.IsNullOrEmpty(text) && automationId == null)
                         throw new ArgumentException("find-deep requires --type, --name, --text or --automation-id to bound the search.");
-                    WriteJson(await bridge.FindElementsDeepAsync(
+                    var deep = await bridge.FindElementsDeepAsync(
                         cli.GetStringOrNull("root"), type, name, text,
-                        ParseFilter(cli.GetStringOrNull("filter")),
-                        cli.Flags.Contains("visible-only"), automationId), cli);
+                        WpfTools.WithStateFilters(ParseFilter(cli.GetStringOrNull("filter")), cli.Flags.Contains("on-screen"), cli.Flags.Contains("has-text")),
+                        cli.Flags.Contains("visible-only"), automationId);
+                    if (cli.Flags.Contains("short-path")) WpfTools.ShortenPaths(deep);
+                    WriteJson(deep, cli);
                     break;
                 }
 
@@ -246,7 +260,7 @@ public static class CliRunner
                 case "binding-errors":
                 {
                     await AttachAsync(processManager, cli, false);
-                    WriteJson(await bridge.GetBindingErrorsAsync(), cli);
+                    WriteJson(WpfTools.MergeBindingErrors(await bridge.GetBindingErrorsAsync()), cli);
                     break;
                 }
 
@@ -413,7 +427,8 @@ public static class CliRunner
                     var result = await bridge.SetTextAsync(
                         await ResolveInputTargetAsync(bridge, cli),
                         cli.GetRequired("text"),
-                        cli.Flags.Contains("physical"));
+                        cli.Flags.Contains("physical"),
+                        cli.Flags.Contains("commit"));
                     WriteJson(new
                     {
                         success = true,
@@ -450,11 +465,18 @@ public static class CliRunner
                     var automationId = cli.GetStringOrNull("automation-id");
                     if (string.IsNullOrEmpty(type) && string.IsNullOrEmpty(name) && string.IsNullOrEmpty(text) && automationId == null)
                         throw new ArgumentException("wait-for requires --type, --name, --text or --automation-id to identify the element.");
-                    WriteJson(await bridge.WaitForElementAsync(
+                    var afterChange = cli.Flags.Contains("after-change");
+                    var waited = await bridge.WaitForElementAsync(
                         cli.GetStringOrNull("root"), type, name, text,
                         cli.GetString("condition", "visible"),
                         cli.GetInt("timeout", 10000),
-                        cli.GetInt("poll", 250), automationId), cli);
+                        cli.GetInt("poll", 250), automationId, afterChange);
+                    WriteJson(new
+                    {
+                        waited.Matched, waited.MatchedHandle, waited.ElementType, waited.WaitedMs,
+                        AlreadyMet = waited.AlreadyMet ? true : (bool?)null,
+                        Note = WpfTools.WaitNote(waited, afterChange)
+                    }, cli);
                     break;
                 }
 
@@ -573,12 +595,74 @@ public static class CliRunner
                     break;
                 }
 
+                case "read-grid":
+                {
+                    await AttachAsync(processManager, cli, false);
+                    var gridOffset = cli.GetInt("offset", 0);
+                    var gridLimit = cli.GetInt("limit", 50);
+                    if (gridOffset < 0 || gridLimit is < 1 or > WpfVisualTreeMcp.Shared.Ipc.ReadGridRequest.MaxLimit)
+                        throw new ArgumentException("--offset must be >= 0 and --limit 1-500.");
+                    var gridColumns = cli.GetStringOrNull("columns")?
+                        .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+                    WriteJson(await WpfTools.ReadGridWhenAsync(async () =>
+                    {
+                        var gridHandle = await bridge.ResolveElementHandleAsync(cli.GetStringOrNull("handle"),
+                            cli.GetStringOrNull("automation-id"), cli.GetStringOrNull("root"));
+                        return await bridge.ReadGridAsync(gridHandle, gridOffset, gridLimit, gridColumns);
+                    }, cli.GetInt("min-rows", 0), cli.GetStringOrNull("contains-text"),
+                        cli.GetInt("timeout", WpfTools.DefaultGridWaitMs), message => new ArgumentException(message)), cli);
+                    break;
+                }
+
+                case "launch":
+                {
+                    WriteJson(await AppWindows.LaunchAsync(processManager, bridge, cli.GetStringOrNull("path") ?? string.Empty,
+                        cli.GetStringOrNull("args"), cli.GetStringOrNull("cwd"), cli.GetInt("timeout", AppWindows.DefaultLaunchTimeoutMs),
+                        !cli.Flags.Contains("no-inject"), message => new ArgumentException(message)), cli);
+                    break;
+                }
+
+                case "window":
+                {
+                    await AttachAsync(processManager, cli, false);
+                    WriteJson(await AppWindows.WindowAsync(bridge, cli.GetStringOrNull("action"), cli.GetStringOrNull("window"),
+                        cli.GetStringOrNull("title"), cli.GetStringOrNull("automation-id"),
+                        cli.GetInt("timeout", AppWindows.DefaultWaitTimeoutMs), message => new ArgumentException(message)), cli);
+                    break;
+                }
+
+                case "dialog":
+                {
+                    await AttachAsync(processManager, cli, false);
+                    var dialogAnswer = cli.GetStringOrNull("answer");
+                    long? dialogHandle = long.TryParse(cli.GetStringOrNull("dialog"), out var parsedDialog) ? parsedDialog
+                        : cli.GetStringOrNull("dialog") == null ? null : throw new ArgumentException("--dialog must be a dialog handle from 'dialog'.");
+                    WriteJson(await WpfTools.NativeDialogAsync(bridge, dialogAnswer, dialogHandle, cli.GetInt("wait", 0),
+                        cli.GetStringOrNull("text"), cli.GetStringOrNull("field")), cli);
+                    break;
+                }
+
+                case "edit-cell":
+                {
+                    await AttachAsync(processManager, cli, false);
+                    var cellRow = cli.GetInt("row", -1);
+                    var cellColumn = cli.GetStringOrNull("column");
+                    var cellText = cli.GetStringOrNull("text");
+                    if (cellRow < 0 || string.IsNullOrWhiteSpace(cellColumn) || cellText == null)
+                        throw new ArgumentException("edit-cell requires --row N (>= 0), --column and --text.");
+                    var cellGrid = await bridge.ResolveElementHandleAsync(cli.GetStringOrNull("handle"),
+                        cli.GetStringOrNull("automation-id"), cli.GetStringOrNull("root"));
+                    WriteJson(await WpfTools.EditGridCellAsync(bridge, cellGrid, cellRow, cellColumn!, cellText,
+                        message => new ArgumentException(message)), cli);
+                    break;
+                }
+
                 case "screenshot":
                 {
                     await AttachAsync(processManager, cli, false);
                     var fullContent = cli.Flags.Contains("full-content");
-                    var maxW = Math.Clamp(cli.GetInt("max-width", 1920), 1, fullContent ? 16384 : 3840);
-                    var maxH = Math.Clamp(cli.GetInt("max-height", 1080), 1, fullContent ? 16384 : 2160);
+                    var maxW = Math.Clamp(cli.GetInt("max-width", WpfTools.DefaultScreenshotWidth), 1, fullContent ? 16384 : 3840);
+                    var maxH = Math.Clamp(cli.GetInt("max-height", WpfTools.DefaultScreenshotHeight), 1, fullContent ? 16384 : 2160);
                     var shotMode = cli.GetString("mode", "auto").ToLowerInvariant();
                     if (shotMode != "auto" && shotMode != "render" && shotMode != "screen")
                         throw new ArgumentException("--mode must be 'auto', 'render' or 'screen'.");
@@ -592,12 +676,14 @@ public static class CliRunner
                     var pid = processManager.CurrentSession!.ProcessId;
                     var outPath = cli.GetStringOrNull("out")
                         ?? Path.Combine(Environment.CurrentDirectory, $"wpf-screenshot-{pid}.png");
-                    await File.WriteAllBytesAsync(outPath, Convert.FromBase64String(shot.ImageBase64));
+                    var shotBytes = Convert.FromBase64String(shot.ImageBase64);
+                    await File.WriteAllBytesAsync(outPath, shotBytes);
                     WriteJson(new
                     {
                         path = Path.GetFullPath(outPath),
                         width = shot.Width,
                         height = shot.Height,
+                        bytes = shotBytes.Length,
                         elementType = shot.ElementType ?? "Window",
                         captureMode = shot.CaptureMode,
                         detail = shot.Detail,
@@ -687,7 +773,7 @@ COMMANDS
   update        [--check | --status]  update this installation (no PID required)
   list                              list inspectable WPF processes
   attach        --pid|--process [--auto-inject]
-  tree          --pid [--root H] [--depth N]
+  tree          --pid [--root H] [--depth N] [--outline]
   report        --pid [--root H] [--max N] [--depth N] [--max-findings N]
   record        start|stop|status|clear --pid [--name N]
   get-recording --pid [--out workflow.json]
@@ -711,7 +797,7 @@ COMMANDS
   drag          --pid (--handle H | --automation-id ID [--root H]) (--target H | --target-automation-id ID [--target-root H] | --delta-x X / --delta-y Y) [--duration MS] [--button left|right|middle]
   touch         --pid (--handle H | --automation-id ID [--root H]) --gesture tap|long_press|swipe|pinch|rotate [--delta-x X] [--scale N] [--angle N]
   select-item   --pid (--handle H | --automation-id ID [--root H]) (--item-text S | --index N)  (changes app state)
-  set-text      --pid (--handle H | --automation-id ID [--root H]) --text 'value' [--physical]  (changes app state)
+  set-text      --pid (--handle H | --automation-id ID [--root H]) --text 'value' [--physical] [--commit]  (changes app state)
   send-keys     --pid --keys 'Ctrl+S' [--handle H | --automation-id ID [--root H]]            (changes app state)
   wait-for      --pid (--type T | --name N | --text S | --automation-id ID) [--condition visible|exists|enabled|hidden] [--timeout MS] [--poll MS]
   set-property  --pid (--handle H | --automation-id ID [--root H]) --property P --value V                    (changes app state, reversible)
@@ -723,6 +809,11 @@ COMMANDS
   layout        --pid --handle H
   export        --pid [--handle H] [--format json|xaml] [--out FILE]
   screenshot    --pid [--handle H] [--out FILE] [--max-width N] [--max-height N] [--mode auto|render|screen] [--full-content]
+  read-grid     --pid (--handle H | --automation-id ID [--root H]) [--offset N] [--limit N] [--columns 'A,B']   (DataGrid rows as text)
+  edit-cell     --pid (--handle H | --automation-id ID [--root H]) --row N --column C --text S   (changes app data)
+  dialog        --pid [--text T [--field F]] [--answer BUTTON] [--dialog HANDLE] [--wait MS]   (list, fill or answer native dialogs)
+  launch        --path EXE [--args 'A B'] [--cwd DIR] [--timeout MS] [--no-inject]   (start an app and attach)
+  window        --pid [--action list|wait|wait_closed|activate|minimize|maximize|restore|close] [--window H | --title S | --automation-id ID] [--timeout MS]
 
 Element handles (elem_XXXXXXXX) come from 'tree' / 'find' and stay valid while
 the target app keeps running.
@@ -736,9 +827,8 @@ TYPICAL WORKFLOW
 ");
     }
 
-    private static void PrintCommandHelp(string command)
-    {
-        var usage = command switch
+    /// <summary>The per-command help text; also the list of options a command accepts.</summary>
+    internal static string? CommandUsage(string command) => command switch
         {
             "update" => "update [--check | --status]\n"
                       + "  Update this installation to the latest stable release. No PID required.\n"
@@ -752,13 +842,45 @@ TYPICAL WORKFLOW
             "attach" => "attach --pid <id> | --process <name> [--auto-inject]\n"
                       + "  Create a session. --auto-inject loads the Inspector DLL into a process\n"
                       + "  that does not already host it (one-time; survives for later commands).",
-            "tree" => "tree --pid <id> [--root <handle>] [--depth <1-100>]\n"
-                    + "  Dump the visual tree. --root zooms into a subtree; --depth defaults to 25.",
+            "tree" => "tree --pid <id> [--root <handle>] [--depth <1-100>] [--outline]\n"
+                    + "  Dump the visual tree. --root zooms into a subtree; --depth defaults to 25.\n"
+                    + "  --outline prints indented text (type, [name], handle per line) instead of\n"
+                    + "  JSON; it is less than half the size.",
+            "launch" => "launch --path <exe> [--args '<command line>'] [--cwd <dir>] [--timeout <ms>] [--no-inject]\n"
+                      + "  Start an application, wait for its first window and attach (the Inspector is\n"
+                      + "  injected unless --no-inject). Prints process_id and the open windows. Takes no\n"
+                      + "  --pid. --cwd defaults to the folder of the exe. The process is never stopped\n"
+                      + "  by this command; close it with the window command and --action close.",
+            "window" => "window --pid <id> [--action <action>] [--window <handle> | --title <text> | --automation-id <id>] [--timeout <ms>]\n"
+                      + "  list (default): top-level WPF windows with handle, title and state.\n"
+                      + "  wait: until a visible window matches (after launch or an action opening one).\n"
+                      + "  wait_closed: until no visible window matches (login or progress windows).\n"
+                      + "  activate | minimize | maximize | restore | close: need exactly one match.\n"
+                      + "  --title is a case-insensitive substring; --timeout (default 10000) applies to\n"
+                      + "  the waits. close only requests it: a confirmation may appear (see dialog).",
+            "dialog" => "dialog --pid <id> [--text <value> [--field <label or id>]] [--answer <button caption>] [--dialog <handle>] [--wait <ms>]\n"
+                      + "  Without --answer: list the application's open native Win32 dialogs (MessageBox\n"
+                      + "  and other standard dialogs) with title, text and buttons. They are not WPF\n"
+                      + "  elements, so tree/find cannot see them. With --answer: press that push button\n"
+                      + "  (exact caption, case-insensitive; captions follow the Windows language).\n"
+                      + "  --dialog is needed only when several dialogs are open. No keyboard or mouse\n"
+                      + "  input is sent. Answering makes the application act on the choice.\n"
+                      + "  --wait (0-25000): dialogs opened after asynchronous work (an error after a\n"
+                      + "  server call) appear later. Listing waits until one is open; answering waits\n"
+                      + "  for a follow-up dialog. Returns as soon as one appears.\n"
+                      + "  --text writes into an edit field before --answer is pressed (Save As file\n"
+                      + "  name); --field picks the field by label substring or id when there are several.",
+            "edit-cell" => "edit-cell --pid <id> (--handle H | --automation-id ID [--root H]) --row <n> --column <header or binding path> --text <text>\n"
+                         + "  Edit one DataGrid cell: begins the edit, sets the text and commits cell and\n"
+                         + "  row, so validation and binding run as for a user edit. --row is the read-grid\n"
+                         + "  row index. Text columns and template columns with one TextBox editor only;\n"
+                         + "  read-only cells and rejected values fail. Prints the previous and new text.\n"
+                         + "  This command CHANGES application data.",
             "report" => "report --pid <id> [--root H] [--max 1-2000] [--depth 1-100] [--max-findings 1-500]\n"
                       + "  Aggregate current binding/validation errors and UI state counts.\n"
                       + "  Defaults: 500 elements, depth 25, 100 findings. Reports truncation.\n"
                       + "  Recent binding traces are process-wide history; state counts are not defects.",
-            "record" => "record start|stop|status|clear --pid <id> [--name N]\n"
+            "record" => "record start|stop|status|clear --pid <id> [--name N] (or --action start|stop|status|clear)\n"
                       + "  Record sequential actions, finds, successful waits and assertions using stable selectors.\n"
                       + "  Storage lives in the target process. Stop/export before clear. Limit: 100 steps.",
             "get-recording" => "get-recording --pid <id> [--out workflow.json]\n"
@@ -775,17 +897,22 @@ TYPICAL WORKFLOW
                       + "  Set WPF_TEST_APP and WPFINSPECT_PATH to absolute executable paths, then dotnet test.\n"
                       + "  The generated test starts a fresh app and terminates only its own app after testing.",
             "props" => "props --pid <id> --handle <handle>\n  List the dependency properties of an element.",
-            "find" => "find --pid <id> [--automation-id ID] [--type T] [--name N] [--text S] [--visible-only] [--root H] [--max N] [--filter JSON]\n"
+            "find" => "find --pid <id> [--automation-id ID] [--type T] [--name N] [--text S] [--visible-only] [--root H] [--max N] [--filter JSON] [--short-path]\n"
                     + "  Search elements (up to --max, default 50). Filters combine with AND:\n"
-                    + "  --type: type name (partial match, e.g. Button)\n"
+                    + "  --type: type name (partial match, e.g. Button); =Type matches that type and\n"
+                    + "    its subclasses only (e.g. =DataGrid skips DataGridCell)\n"
                     + "  --text: visible text content (button caption, TextBlock text, window\n"
                     + "          title, tooltip; case-insensitive substring)\n"
-                    + "  --automation-id: exact, case-sensitive AutomationProperties.AutomationId; --name: x:Name substring\n"
+                    + "  --automation-id: exact, case-sensitive AutomationProperties.AutomationId,\n"
+                    + "    or x:Name for elements without one (outside templates); --name: x:Name substring\n"
                     + "  --visible-only: exclude collapsed/hidden elements\n"
+                    + "  --short-path: keep only the nearest ancestors in each result's path (also find-deep)\n"
+                    + "  --on-screen: only elements inside their scroll viewport and window (stricter\n"
+                    + "    than --visible-only); --has-text: only elements with text (both also find-deep)\n"
                     + "  --filter: JSON object of property=value pairs, e.g. '{\"IsEnabled\":\"True\"}'\n"
                     + "  Results include text, automationId, isVisible/isEnabled and screenBounds.\n"
                     + "  Example: find --pid 1234 --type Button --text Save --visible-only",
-            "find-deep" => "find-deep --pid <id> (--type T | --name N | --text S | --automation-id ID) [--visible-only] [--root H] [--filter JSON]\n"
+            "find-deep" => "find-deep --pid <id> (--type T | --name N | --text S | --automation-id ID) [--visible-only] [--on-screen] [--has-text] [--short-path] [--root H] [--filter JSON]\n"
                          + "  Unbounded search; requires --type, --name, --text or --automation-id. Same filters as 'find'.",
             "bindings" => "bindings --pid <id> --handle <handle>\n  Show data bindings and their status for an element.",
             "binding-errors" => "binding-errors --pid <id>\n  List binding errors captured since the app started.",
@@ -833,18 +960,23 @@ TYPICAL WORKFLOW
                      + "  Windows desktop and application touch support. CHANGES application state.\n"
                      + "  Success confirms injection; verify the application's response separately.",
             "select-item" => "select-item --pid <id> (--handle H | --automation-id ID [--root H]) (--item-text <text> | --index <n>)\n"
-                           + "  Select an item in a ComboBox/ListBox/ListView/TabControl by visible\n"
-                           + "  text (case-insensitive substring) or zero-based index. Works with\n"
+                           + "  Select an item in a ComboBox/ListBox/ListView/DataGrid/TabControl by\n"
+                           + "  visible text (case-insensitive substring) or zero-based index. For a\n"
+                           + "  DataGrid the text matches any visible cell of a row, as read-grid\n"
+                           + "  returns it, and the index is the read-grid row index. Works with\n"
                            + "  virtualized items and raises proper selection events — prefer this\n"
                            + "  over clicking dropdown items. On failure the error lists available\n"
                            + "  items. This command CHANGES application state.",
-            "set-text" => "set-text --pid <id> (--handle H | --automation-id ID [--root H]) --text <value> [--physical]\n"
+            "set-text" => "set-text --pid <id> (--handle H | --automation-id ID [--root H]) --text <value> [--physical] [--commit]\n"
                         + "  Replace the text/value of an element (TextBox, ComboBox, ...).\n"
                         + "  Default: UI Automation IValueProvider.SetValue, with a\n"
                         + "  TextBox.Text / PasswordBox.Password / reflected-Text fallback.\n"
                         + "  --physical: focus the element and type via OS keyboard input\n"
                         + "  (clears existing text with Ctrl+A/Delete first, then types each\n"
-                        + "  character). This command CHANGES application state.",
+                        + "  character).\n"
+                        + "  --commit: then leave the field as Tab would and write pending bindings,\n"
+                        + "  reporting the bound source values and validation errors (needed for\n"
+                        + "  bindings that update on LostFocus, the TextBox default). This command CHANGES application state.",
             "send-keys" => "send-keys --pid <id> --keys <combo> [--handle H | --automation-id ID [--root H]]\n"
                          + "  Send a keyboard shortcut to an element, or to whatever has focus\n"
                          + "  when both --handle and --automation-id are omitted. Modifiers: Ctrl, Shift, Alt, Win.\n"
@@ -852,13 +984,15 @@ TYPICAL WORKFLOW
                          + "        Delete, Insert, Home, End, PageUp, PageDown, Up/Down/Left/Right.\n"
                          + "  Examples: 'Ctrl+S', 'Ctrl+Shift+F', 'Enter', 'F5', 'Alt+F4', 'Win+R'.\n"
                          + "  This command CHANGES application state.",
-            "wait-for" => "wait-for --pid <id> (--type T | --name N | --text S | --automation-id ID) [--condition visible|exists|enabled|hidden] [--timeout <ms>] [--poll <ms>]\n"
+            "wait-for" => "wait-for --pid <id> (--type T | --name N | --text S | --automation-id ID) [--root H] [--condition visible|exists|enabled|hidden] [--timeout <ms>] [--poll <ms>] [--after-change]\n"
                         + "  Poll in the target app until an element matching the criteria satisfies\n"
                         + "  the condition, instead of sleep-and-retry. Conditions:\n"
                         + "    visible (default) - element exists and is on screen\n"
                         + "    exists            - in the tree even if not visible\n"
                         + "    enabled           - visible and IsEnabled=true\n"
                         + "    hidden            - no matching visible element (e.g. a spinner cleared)\n"
+                        + "  --after-change: if the condition already holds at the start (a status text\n"
+                        + "  from before a reload), first wait until it stops holding, then until it holds.\n"
                         + "  --timeout defaults to 10000 (max 25000); --poll defaults to 250.\n"
                         + "  Returns matched (bool), waitedMs, and matchedHandle/elementType when found.",
             "set-property" => "set-property --pid <id> (--handle H | --automation-id ID [--root H]) --property <name> --value <value>\n"
@@ -902,8 +1036,23 @@ TYPICAL WORKFLOW
                                 + "  attribute that property's value to the style setter or active trigger\n"
                                 + "  that set it (or local/inherited/default).",
             "layout" => "layout --pid <id> --handle <handle>\n  Show layout info (sizes, margin, alignment, visibility).",
-            "screenshot" => "screenshot --pid <id> [--handle <handle>] [--out <file>] [--max-width N] [--max-height N] [--mode auto|render|screen] [--full-content]\n"
-                           + "  Capture the window (or one element) as PNG and print the file path.\n"
+            "read-grid" => "read-grid --pid <id> (--handle <handle> | --automation-id <id> [--root <handle>]) [--offset N] [--limit 1-500] [--columns 'Header A,Header B']\n"
+                          + "    [--min-rows N] [--contains-text S] [--timeout MS]\n"
+                          + "  Read DataGrid rows as text from the data items through the column bindings,\n"
+                          + "  including virtualized/off-screen rows; no scrolling, no screenshot. Prints\n"
+                          + "  rowCount, columns and rows ({index, cells[]} in column order), selectedIndices\n"
+                          + "  and hasMore. Page with --offset/--limit (default 0/50). --columns restricts\n"
+                          + "  output to exact headers or binding paths (comma-separated). The target may be\n"
+                          + "  the grid, an element inside it, or a container with exactly one DataGrid.\n"
+                          + "  Template columns without a binding (valueSource 'visual') only have text for\n"
+                          + "  rows on screen. Standard WPF DataGrid only. Read-only.\n"
+                          + "  --min-rows / --contains-text wait (up to --timeout, default 5000, max 25000 ms)\n"
+                          + "  until the grid has that many rows and/or a returned cell contains the text;\n"
+                          + "  a grid that does not exist yet counts as not ready. Exit code 1 on timeout.",
+            "screenshot" => "screenshot --pid <id> [--handle <handle> | --automation-id ID [--root H]] [--out <file>] [--max-width N] [--max-height N] [--mode auto|render|screen] [--full-content]\n"
+                           + "  Capture the active window (else the main window) or one element as PNG and print the file path.\n"
+                           + "  Output is downscaled to fit 1280x800 by default; pass --handle to capture one\n"
+                           + "  element, or raise --max-width/--max-height (up to 3840x2160) for small text.\n"
                            + "  --mode auto (default): screen for native HwndHost content, render otherwise.\n"
                            + "  --mode render: off-screen re-render; rejects native content; works when covered,\n"
                            + "  but cannot see open popups/dropdowns/context menus.\n"
@@ -918,6 +1067,28 @@ TYPICAL WORKFLOW
             _ => null,
         };
 
+    private static readonly string[] CommonOptions = { "pid", "process", "compact", "verbose", "help", "h" };
+
+    /// <summary>
+    /// The error for options the command does not take, or null. Unknown options used to be ignored,
+    /// so a misspelled filter widened a search and a misspelled target acted on something else.
+    /// </summary>
+    internal static string? UnknownOptionError(string command, IEnumerable<string> given)
+    {
+        if (command == "update" || CommandUsage(command) is not { } usage) return null;
+        var known = System.Text.RegularExpressions.Regex.Matches(usage, @"--([a-z][a-z0-9-]*)")
+            .Select(m => m.Groups[1].Value).Concat(CommonOptions).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        var unknown = given.Where(option => !known.Contains(option, StringComparer.OrdinalIgnoreCase)).ToList();
+        if (unknown.Count == 0) return null;
+        var parts = unknown.Select(option => ToolArgumentGuard.Suggest(option, known) is { } meant
+            ? $"--{option} (did you mean --{meant}?)" : $"--{option}");
+        return $"Unknown option{(unknown.Count > 1 ? "s" : "")} {string.Join(", ", parts)} for '{command}'; nothing was done. "
+             + $"Options: {string.Join(", ", known.Select(k => "--" + k))}. See '{command} --help'.";
+    }
+
+    private static void PrintCommandHelp(string command)
+    {
+        var usage = CommandUsage(command);
         if (usage is null)
         {
             PrintGeneralHelp();

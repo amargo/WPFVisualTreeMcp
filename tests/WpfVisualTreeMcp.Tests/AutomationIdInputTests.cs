@@ -37,7 +37,7 @@ public class AutomationIdInputTests
             case "touch": bridge.Setup(x => x.TouchGestureAsync(It.Is<TouchGestureOptions>(o => o.ElementHandle == "resolved" && o.Gesture == "tap")))
                 .ReturnsAsync(new TouchGestureResult()); break;
             case "select": bridge.Setup(x => x.SelectItemAsync("resolved", null, 2)).ReturnsAsync(new SelectItemResult()); break;
-            case "text": bridge.Setup(x => x.SetTextAsync("resolved", "", false)).ReturnsAsync(new SetTextResult()); break;
+            case "text": bridge.Setup(x => x.SetTextAsync("resolved", "", false, false)).ReturnsAsync(new SetTextResult()); break;
             case "keys": bridge.Setup(x => x.SendKeysAsync("resolved", "Ctrl+A")).ReturnsAsync(new SendKeysResult()); break;
             case "assert": bridge.Setup(x => x.AssertElementAsync("resolved", "Text", "")).ReturnsAsync(""); break;
             case "set-property": bridge.Setup(x => x.SetPropertyAsync("resolved", "Tag", "test")).ReturnsAsync(new SetPropertyResult()); break;

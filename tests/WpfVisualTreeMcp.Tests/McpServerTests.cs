@@ -479,7 +479,7 @@ public class WpfToolsTests
             WaitedMs = 480
         };
         _ipcBridgeMock
-            .Setup(x => x.WaitForElementAsync(null, "Button", null, "Save", "enabled", 5000, 100, null))
+            .Setup(x => x.WaitForElementAsync(null, "Button", null, "Save", "enabled", 5000, 100, null, false))
             .ReturnsAsync(expected);
 
         // Act
@@ -494,7 +494,7 @@ public class WpfToolsTests
             matched_handle = "elem_00000005",
             element_type = "System.Windows.Controls.Button"
         });
-        _ipcBridgeMock.Verify(x => x.WaitForElementAsync(null, "Button", null, "Save", "enabled", 5000, 100, null), Times.Once);
+        _ipcBridgeMock.Verify(x => x.WaitForElementAsync(null, "Button", null, "Save", "enabled", 5000, 100, null, false), Times.Once);
     }
 
     [Fact]
@@ -748,7 +748,7 @@ public class WpfToolsTests
     {
         // Arrange
         _ipcBridgeMock
-            .Setup(x => x.CaptureScreenshotAsync("elem_1", 1920, 1080, "screen", false))
+            .Setup(x => x.CaptureScreenshotAsync("elem_1", 1280, 800, "screen", false))
             .ReturnsAsync(new ScreenshotResult
             {
                 ImageBase64 = "iVBORw0KGgo=",
@@ -765,7 +765,7 @@ public class WpfToolsTests
         // Assert
         result.Content.Should().HaveCount(2);
         _ipcBridgeMock.Verify(
-            x => x.CaptureScreenshotAsync("elem_1", 1920, 1080, "screen", false),
+            x => x.CaptureScreenshotAsync("elem_1", 1280, 800, "screen", false),
             Times.Once);
     }
 

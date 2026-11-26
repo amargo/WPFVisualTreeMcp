@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Data;
@@ -66,7 +67,7 @@ internal static class DiagnosticReporter
                     if (expression == null) continue;
                     result.BindingsChecked++;
                     if (expression.HasError || expression.Status is BindingStatus.PathError or BindingStatus.UpdateSourceError or BindingStatus.UpdateTargetError)
-                        Finding(element, "binding_error", $"Binding status: {expression.Status}; HasError: {expression.HasError}.", property.Name);
+                        Finding(element, "binding_error", $"Binding status: {expression.Status}; HasError: {expression.HasError}.{DescribeBinding(expression)}", property.Name);
                 }
                 var children = TreeWalker.GetAllVisualChildren(element);
                 if (depth >= maxDepth)
@@ -88,17 +89,37 @@ internal static class DiagnosticReporter
                 Finding(element, "inspection_error", ex.GetType().Name + ": " + ex.Message);
             }
         }
-        var errors = bindings.GetRecentErrors(50, out var totalErrors);
+        // The same trace repeats once per realized row or cell; merge identical errors so the
+        // report stays small and distinct problems are not buried.
+        var errors = bindings.GetRecentErrors(500, out var totalErrors);
         result.CapturedBindingErrorCount = totalErrors;
         if (totalErrors > errors.Count) Truncated("binding_error_history");
-        foreach (var error in errors)
+        var groups = errors
+            .GroupBy(e => (e.ElementType, e.ElementName, e.Property, e.BindingPath, e.ErrorType, Message: InstanceIds.Replace(e.Message, "$1")))
+            .Select(g => (Latest: g.OrderByDescending(e => e.Timestamp).First(), Count: g.Count(), First: g.Min(e => e.Timestamp), g.Key.Message))
+            .OrderByDescending(g => g.Latest.Timestamp).ToList();
+        if (groups.Count > 50) Truncated("binding_error_groups");
+        foreach (var group in groups.Take(50))
             result.RecentBindingErrors.Add(new BindingError
             {
-                ElementType = Clip(error.ElementType), ElementName = error.ElementName == null ? null : Clip(error.ElementName),
-                Property = Clip(error.Property), BindingPath = Clip(error.BindingPath), ErrorType = Clip(error.ErrorType),
-                Message = Clip(error.Message), Timestamp = error.Timestamp
+                ElementType = Clip(group.Latest.ElementType), ElementName = group.Latest.ElementName == null ? null : Clip(group.Latest.ElementName),
+                Property = Clip(group.Latest.Property), BindingPath = Clip(group.Latest.BindingPath), ErrorType = Clip(group.Latest.ErrorType),
+                Message = Clip(group.Message), Timestamp = group.Latest.Timestamp,
+                Occurrences = group.Count, FirstSeen = group.Count > 1 ? group.First : null
             });
         return result;
+    }
+
+    // WPF traces identify instances by hash code; that alone must not split one problem into many.
+    private static readonly System.Text.RegularExpressions.Regex InstanceIds =
+        new(@"(HashCode)=-?\d+", System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    private static string DescribeBinding(BindingExpressionBase expression)
+    {
+        if (expression is not BindingExpression single) return string.Empty;
+        var path = single.ParentBinding?.Path?.Path;
+        var source = single.DataItem?.GetType().Name;
+        return " Path: '" + (string.IsNullOrEmpty(path) ? "." : path) + "'; source: " + (source ?? "none (null DataContext or unresolved source)") + ".";
     }
 
     private static string Clip(string value) => value.Length <= 2048 ? value : value.Substring(0, 2048) + "…";

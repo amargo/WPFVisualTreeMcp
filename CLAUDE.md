@@ -40,7 +40,7 @@ python scripts/test_automation_package.py --packages artifacts/packages
 AI Agent (Claude Code)
     ↓ [MCP Protocol - JSON-RPC over stdio]
 MCP Server (.NET 8.0)
-    ├─ WpfTools (38 tools)
+    ├─ WpfTools (43 tools)
     ├─ ProcessManager (discovers WPF processes)
     └─ NamedPipeBridge (IPC)
         ↓ [Named Pipes: wpf_inspector_{pid}]
@@ -54,15 +54,15 @@ Target WPF Application (.NET Framework)
         └─ IpcServer (named pipe communication)
 ```
 
-**Key Design:** The server runs separately and communicates via named pipes. `wpf_click_element`, `wpf_move_mouse`, `wpf_scroll`, `wpf_drag`, `wpf_touch_gesture`, `wpf_select_item`, `wpf_set_text`, `wpf_send_keys`, `wpf_set_property`, and `wpf_revert_property` change application state. `wpf_replay` executes recorded actions; full-content screenshots can temporarily scroll controls and trigger handlers. Recording/snapshots/watches maintain Inspector state. `wpf_set_property` is reversible via `wpf_revert_property` (per-session undo stack that restores the prior binding, local value, or default).
+**Key Design:** The server runs separately and communicates via named pipes. `wpf_click_element`, `wpf_move_mouse`, `wpf_scroll`, `wpf_drag`, `wpf_touch_gesture`, `wpf_select_item`, `wpf_set_text`, `wpf_send_keys`, `wpf_edit_grid_cell`, `wpf_native_dialog` (when answering), `wpf_launch`, `wpf_window` (activate/minimize/maximize/restore/close), `wpf_set_property`, and `wpf_revert_property` change application state. `wpf_replay` executes recorded actions; full-content screenshots can temporarily scroll controls and trigger handlers. Recording/snapshots/watches maintain Inspector state. `wpf_set_property` is reversible via `wpf_revert_property` (per-session undo stack that restores the prior binding, local value, or default).
 
 ## Key Source Locations
 
 | Component | Location | Purpose |
 |-----------|----------|---------|
 | MCP Server Entry | `src/WpfVisualTreeMcp.Server/Program.cs` | Server init with MCP SDK; routes to CLI mode if args present |
-| Tool Definitions | `src/WpfVisualTreeMcp.Server/WpfTools.cs` | 38 tools with `[McpServerTool]` attributes |
-| CLI Front-End | `src/WpfVisualTreeMcp.Server/Cli/CliRunner.cs` | 38 inspection/workflow commands plus CLI-only `update` |
+| Tool Definitions | `src/WpfVisualTreeMcp.Server/WpfTools.cs` | 43 tools with `[McpServerTool]` attributes |
+| CLI Front-End | `src/WpfVisualTreeMcp.Server/Cli/CliRunner.cs` | 43 inspection/workflow commands plus CLI-only `update` |
 | Workflow Recording | `WorkflowRecorder.cs`, `StableSelectors.cs`, `InspectorService.Workflow.cs` | Inspector-owned recording and gated replay; exact selectors, explicit waits/assertions |
 | Test Export | `src/WpfVisualTreeMcp.Server/WorkflowTestExporter.cs` | Data-only workflow JSON plus a standalone xUnit project using CLI replay |
 | Aggregate Diagnostics | `src/WpfVisualTreeMcp.Inspector/DiagnosticReporter.cs` | Bounded realized-tree scan, current binding/validation errors and separate process-wide trace history |
@@ -72,6 +72,7 @@ Target WPF Application (.NET Framework)
 | Property Writer | `src/WpfVisualTreeMcp.Inspector/PropertyWriter.cs` | Live-edits dependency properties (TypeConverter coercion) with a per-session undo stack (restores prior binding/local/default) |
 | Snapshot / Diff | `TreeWalker.CaptureSnapshot` + `InspectorService.ComputeDiff` | Capture a subtree's curated state keyed by element handle; diff two snapshots (handle stable → changed/added/removed) |
 | Injector Helper | `src/WpfVisualTreeMcp.InjectorHelper/Program.cs` | 32-bit .NET 8 helper exe spawned by `ProcessInjector` for cross-arch injection (v0.6.0) |
+| Grid Reader | `src/WpfVisualTreeMcp.Inspector/GridReader.cs` | `wpf_read_grid` / CLI `read-grid`: pages DataGrid and ListView/GridView rows as text from the data items via column bindings (no scrolling; virtualized rows included); also row search for `wpf_select_item`. `wpf_edit_grid_cell` reuses `ControlOperations` `grid_edit` |
 | C# Test SDK | `src/WpfVisualTreeMcp.Automation/` | WpfApplication/WpfElement, async actions and exact property/predicate waits; standalone NuGet payload |
 | IPC Bridge | `src/WpfVisualTreeMcp.Automation/Infrastructure/InspectorBridge.cs` | Shared pipe transport; Server/Services/NamedPipeBridge adapts errors to MCP |
 | Process Manager | `src/WpfVisualTreeMcp.Automation/Infrastructure/ProcessManager.cs` | Shared WPF process discovery and attachment |
@@ -146,13 +147,52 @@ Target WPF Application (.NET Framework)
   and replays in a fresh app. The optional gesture path requires the interactive desktop.
 - Uses direct byte I/O (not StreamReader/Writer) due to .NET Framework 4.8 deadlock issues
 
+### Server / Inspector compatibility
+- `InspectorFeatures.Level` (Shared) is compiled into both halves; the Inspector reports it in
+  `GetCapabilitiesResponse.FeatureLevel` (0 for older builds). `InspectorBridge` caches it per
+  process, appends a note to failed responses when the levels differ, and `wpf_attach` returns it
+  as `inspector_compatibility`. Raise the level whenever the server starts relying on new
+  Inspector behavior.
+- `scripts/Deploy-Local.ps1` rebuilds Release in place while MCP servers or inspected apps hold
+  the binaries (renames loaded files aside, removes stale copies once free).
+
+### Launch and windows
+- `wpf_launch` / CLI `launch` and `wpf_window` / CLI `window` live in `Server/AppWindows.cs` and reuse
+  the Inspector's existing `Window` request (no Inspector change). Launch uses shell execute so the
+  application does not inherit the server's stdout (the MCP stream), waits for the first window, then
+  attaches; it never kills the process. `LaunchRefusal` allows only local WPF executables (assembly references
+  PresentationFramework) outside the Windows directory and refuses shells/command hosts: the tool must not become a command runner. Window waits poll the list from the server side.
+
+### Unknown parameters
+- `ToolArgumentGuard` (an `AddCallToolFilter`) rejects MCP arguments missing from the tool's input schema,
+  suggesting the meant name; `CliRunner.UnknownOptionError` does the same for CLI options, taking the allowed
+  options from the command's help text, so every option a command reads must appear in its help.
+
+### Native dialogs
+- `wpf_native_dialog` / CLI `dialog` (`NativeDialogs.cs`) list and answer Win32 `#32770` windows of
+  the process (MessageBox). Pure Win32, handled at the top of `HandleRequestAsync` before the
+  Dispatcher and the interaction gate: the request that opened the dialog is still blocked inside
+  it and holds the gate. Buttons are pressed with a posted `WM_COMMAND`, never with input. Editable `Edit`
+  fields are listed with the nearest preceding `Static` as label and filled with `WM_SETTEXT` before the
+  button is pressed (`NativeDialogFieldTests` drives a real in-process SaveFileDialog).
+
+### Keyboard input
+- `SendKeys` runs through `HandleSendKeysAsync`: prepare/focus on the Dispatcher, wait off the
+  Dispatcher until the process owns the foreground (never send otherwise: OS keys go to the
+  foreground window of any application), confirm focus inside the target, send, then use
+  `KeyDeliveryProbe` (InputManager.PreNotifyInput) to warn when WPF saw no key down.
+  `PhysicalInputGuard.BringToForeground` (AttachThreadInput + SetForegroundWindow) replaces a bare
+  `Window.Activate()` for all physical input; ownership is still verified before anything is sent.
+  Do not pump the Dispatcher from inside an operation: a key that opens a modal dialog would
+  block the reply.
+
 ### Element Handles
 - Valid only within same Inspector session (same process lifetime)
 - Format: `elem_{counter:X8}` (hex counter, e.g., `elem_00000052`)
 - Restarting the target WPF app invalidates all handles
 - Handle cache uses weak references: elements removed from the UI can be garbage-collected (their handles then expire)
 - If a handle is not found, the tool returns an error explaining how to recover (re-run `wpf_find_elements`)
-- All input tools, assertions and property edits accept exactly one `element_handle` or `automation_id` (send-keys/revert may omit both for their existing default behavior). IDs match `AutomationProperties.AutomationId` exactly, case-sensitively. `root_handle` scopes ID lookup; missing/ambiguous IDs fail without input. Find/deep/wait also accept `automation_id` (`--automation-id` in CLI). The capability handshake prevents older Inspectors from ignoring the new filters. ID resolution returns handles before the existing action path, so recording still captures stable selectors. Drag also resolves `target_automation_id` with an independent `target_root_handle`; both endpoints resolve before input. Shared `ElementTarget` validation prevents invalid selectors from falling back to keyboard focus. MCP parameters are named; required non-target parameters remain required in the tool schema.
+- All input tools, assertions and property edits accept exactly one `element_handle` or `automation_id` (send-keys/revert may omit both for their existing default behavior). IDs match `AutomationProperties.AutomationId` exactly, case-sensitively; elements without one are identified by `x:Name` outside templates (UIA/FlaUI ById parity, `AutomationIdResolver.EffectiveId`), and an explicit ID wins over name-only matches. `root_handle` scopes ID lookup; missing/ambiguous IDs fail without input. Find/deep/wait also accept `automation_id` (`--automation-id` in CLI). The capability handshake prevents older Inspectors from ignoring the new filters. ID resolution returns handles before the existing action path, so recording still captures stable selectors. Drag also resolves `target_automation_id` with an independent `target_root_handle`; both endpoints resolve before input. Shared `ElementTarget` validation prevents invalid selectors from falling back to keyboard focus. MCP parameters are named; required non-target parameters remain required in the tool schema.
 
 ### IPC Request Serialization (IMPORTANT)
 `IpcSerializer.SerializeRequest` must serialize the payload by its **runtime** type
@@ -167,6 +207,9 @@ The Inspector strips UTF-8 BOM (0xEF 0xBB 0xBF) before JSON parsing to prevent d
 - Traverses standard visual children via `VisualTreeHelper`
 - Also enumerates `AdornerLayer` adorners (e.g., Fluent.Ribbon Backstage)
 - Traverses into `Popup` child elements (separate visual trees)
+- Searches without a root also cover open context menus and tooltips: their Popup has no visual
+  parent, so `GetAllSearchRoots` adds its content from `PresentationSource.CurrentSources`
+  (same UI thread only; template popups such as ComboBox drop-downs are already in the window tree)
 - `FindElements` searches across ALL open windows when no `root_handle` given
 - Query filters (AND semantics): `type_name` (partial), `element_name` (x:Name substring),
   `text` (visible text content — button captions, TextBlock text, window title, tooltip,
@@ -182,7 +225,7 @@ The Inspector strips UTF-8 BOM (0xEF 0xBB 0xBF) before JSON parsing to prevent d
   `screen` uses GDI BitBlt of the on-screen pixels (includes open Popups, ComboBox
   dropdowns, context menus and tooltips — requires the window visible and unobstructed)
 - DPI-aware via `PresentationSource.FromVisual`
-- Downscales if exceeding `max_width`/`max_height` (default 1920x1080)
+- Downscales if exceeding `max_width`/`max_height` (MCP/CLI default 1280x800 to keep image payloads small; SDK methods keep 1920x1080). The MCP result text reports the PNG size and hints at element capture when it is large. JPEG was measured larger than PNG for WPF UI and is deliberately not offered
 - Returns MCP `ImageContentBlock` (base64 PNG) — Claude sees the image directly
 - `full_content=true` / `--full-content` is render-only and may temporarily scroll
   virtualized controls, restoring offsets in `finally`. It uses the interaction
@@ -236,7 +279,7 @@ The server uses the official Microsoft/Anthropic MCP SDK. Configure in `.mcp.jso
 The server executable doubles as a command-line tool. `WpfVisualTreeMcp.Server.exe`
 with **no arguments** runs the MCP stdio server; with **any recognised subcommand**
 it runs a single one-shot CLI command instead (`Program.cs` checks `args[0]` via
-`CliRunner.IsCliCommand`). This gives the same 38 capabilities without an MCP
+`CliRunner.IsCliCommand`). This gives the same 43 capabilities without an MCP
 connection — useful when the MCP server is not connected, for scripting, or for
 verifying the pipeline manually.
 
@@ -250,7 +293,7 @@ shell call. No MCP handshake required; `--help` is self-documenting.
 - **Stateless:** each command re-creates the lightweight session internally, so
   element handles (which live in the Inspector) stay valid across separate calls
   as long as the target app keeps running.
-- **Targeting:** every inspection command except `list` takes `--pid <id>` or `--process <name>`; `update` takes neither.
+- **Targeting:** every inspection command except `list` and `launch` takes `--pid <id>` or `--process <name>`; `update` takes neither.
 - **Updating:** `update [--check | --status]` is CLI-only (not an MCP tool). It updates
   the invoked global/custom-path tool or portable folder, never another copy.
   Source builds and package caches are detected and left to their own workflows.
@@ -276,7 +319,10 @@ shell call. No MCP handshake required; `--help` is self-documenting.
     the error lists the available items.
   - `set-text` — `IValueProvider.SetValue` by default, with TextBox/PasswordBox
     direct-property and reflected fallbacks; `--physical` types via keyboard.
-    The response reports the value read back after the write.
+    The response reports the value read back after the write. `--commit` / `commit=true` then leaves the
+    field (MoveFocus Next), writes dirty bindings (template-set ones found by property name) and reports
+    bound source values and validation errors; `InspectorService.CommitTextAsync` waits off the Dispatcher
+    until physically typed text has arrived.
   - `send-keys` — OS-level keyboard input; modifiers `Ctrl/Shift/Alt/Win` plus
     letters, digits, F1-F12, and named keys.
   - `ControlInteractor` prepares interactions; mouse/touch executors run their timed sequences on workers.

@@ -16,6 +16,36 @@ internal sealed class PhysicalInputGuard
             throw new InvalidOperationException("The attached application lost foreground focus; input was stopped.");
     }
 
+    /// <summary>True when a window of this process is the OS foreground window, i.e. receives keyboard input.</summary>
+    public static bool OwnsForeground()
+    {
+        GetWindowThreadProcessId(GetForegroundWindow(), out var owner);
+        return owner == (uint)Process.GetCurrentProcess().Id;
+    }
+
+    /// <summary>
+    /// Activates a window for input. Windows refuses a plain activation from a process that did
+    /// not receive the last input event; sharing the input queue of the current foreground thread
+    /// for the duration of the call is the documented way around that. Callers still verify
+    /// ownership before sending anything: this only asks, it does not assume success.
+    /// </summary>
+    public static void BringToForeground(IntPtr handle)
+    {
+        if (handle == IntPtr.Zero || OwnsForeground()) return;
+        var foregroundThread = GetWindowThreadProcessId(GetForegroundWindow(), out _);
+        var thisThread = GetCurrentThreadId();
+        var attached = foregroundThread != 0 && foregroundThread != thisThread && AttachThreadInput(thisThread, foregroundThread, true);
+        try
+        {
+            BringWindowToTop(handle);
+            SetForegroundWindow(handle);
+        }
+        finally
+        {
+            if (attached) AttachThreadInput(thisThread, foregroundThread, false);
+        }
+    }
+
     public void EnsureMouseReleased()
     {
         foreach (int key in new[] { 1, 2, 4 })
@@ -64,6 +94,10 @@ internal sealed class PhysicalInputGuard
     [StructLayout(LayoutKind.Sequential)] private struct POINT { public int X, Y; }
     [DllImport("user32.dll")] private static extern short GetAsyncKeyState(int key);
     [DllImport("user32.dll")] private static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")] private static extern bool SetForegroundWindow(IntPtr window);
+    [DllImport("user32.dll")] private static extern bool BringWindowToTop(IntPtr window);
+    [DllImport("user32.dll")] private static extern bool AttachThreadInput(uint attach, uint attachTo, bool attached);
+    [DllImport("kernel32.dll")] private static extern uint GetCurrentThreadId();
     [DllImport("user32.dll")] private static extern IntPtr WindowFromPoint(POINT point);
     [DllImport("user32.dll")] private static extern bool IsChild(IntPtr parent, IntPtr child);
     [DllImport("user32.dll")] private static extern IntPtr GetAncestor(IntPtr window, uint flags);

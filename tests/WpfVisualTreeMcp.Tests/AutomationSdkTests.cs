@@ -88,7 +88,7 @@ public class AutomationSdkTests
         var bridge = new Mock<IIpcBridge>(MockBehavior.Strict);
         bridge.Setup(x => x.TryResolveAutomationIdAsync("status", null)).ReturnsAsync("handle");
         bridge.Setup(x => x.GetElementPropertiesAsync("handle")).Returns(() => { observed.TrySetResult(); return Task.FromResult(Text(text)); });
-                bridge.Setup(x => x.SetTextAsync("handle", "loaded", false)).Returns(() => { text = "loaded"; return Task.FromResult(new SetTextResult()); });
+                bridge.Setup(x => x.SetTextAsync("handle", "loaded", false, false)).Returns(() => { text = "loaded"; return Task.FromResult(new SetTextResult()); });
         await using var app = App(bridge);
         var element = app.ByAutomationId("status");
         var wait = element.WaitForPropertyAsync("Text", "loaded", Fast);

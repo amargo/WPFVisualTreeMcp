@@ -7,6 +7,120 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `wpf_read_grid` / CLI `read-grid`: page standard WPF DataGrid rows as text. Values
+  are evaluated from the data items through the column bindings (converters and
+  `StringFormat` in the grid's language), so virtualized rows are read without
+  scrolling or screenshots. Supports offset/limit paging, column selection by header
+  or binding path, selection/current-row indices, and targets inside or around the
+  grid. Older Inspectors are rejected with restart guidance. Columns report the
+  binding path (`.` for whole-item bindings) and converter type.
+- `type_name` in find/deep-find/wait accepts `=Type` to match only that type and its
+  subclasses (for example `=DataGrid` instead of every type containing "DataGrid").
+- Server and Inspector compare a feature level: `wpf_attach` reports
+  `inspector_compatibility`, and errors from a stale Inspector (or stale server) say
+  which half to refresh.
+- `wpf_read_grid` can wait for data: `min_rows` / `contains_text` with `timeout_ms`.
+- `wpf_find_elements` filters `on_screen` (inside the scroll viewport and window) and
+  `has_text`.
+- `scripts/Deploy-Local.ps1` rebuilds the Release server while it is in use.
+- `wpf_native_dialog` lists editable fields of a dialog; `text` (+ `field`) / CLI `dialog --text
+  [--field]` fills one before `answer` is pressed, e.g. the file name of a Save As or Open dialog.
+  No keyboard input. Inspector feature level 11. Split buttons are listed too, so the Open button
+  of a file dialog can be pressed; while the application shuts down the tool says so instead of
+  reporting an outdated Inspector.
+- `wpf_native_dialog` `wait_ms` / CLI `dialog --wait`: wait for a dialog that an asynchronous
+  operation opens later (listing), or for a follow-up dialog after an answer.
+- `wpf_launch` / CLI `launch`: start an application by its `.exe` path, wait for its first
+  window and attach. Only local WPF applications (referencing PresentationFramework) outside the
+  Windows directory; network paths, shells and script hosts are refused.
+- Unknown parameters are rejected instead of ignored, with the likely meant name: MCP tool
+  arguments are checked against the tool schema, CLI options against the command help
+  (`type` for `type_name` used to widen a search; `window_handle` captured another window).
+- `wpf_wait_for_element` reports `already_met` when the condition held at the start (possibly the
+  previous state); `after_change` / CLI `wait-for --after-change` first waits for it to stop holding.
+  Inspector feature level 12.
+- `wpf_set_text` `commit` / CLI `set-text --commit`: after writing, leave the field as Tab would,
+  write bindings still holding the value (LostFocus is the TextBox default, so the view model
+  otherwise keeps the old value) and report the bound source values and validation errors.
+  Physical typing is committed once the typed text has arrived. A value written through UI Automation
+  is first focused (activating the window), so the application's own LostFocus formatting and
+  validation run; the result shows the reformatted text. Inspector feature level 10.
+- Physical `wpf_set_text` refuses to type when keyboard focus cannot be moved into the target
+  (a composite that hands focus away); it used to type into the previously focused field.
+- `wpf_select_item` matches virtualized items by their data (public text and number properties)
+  when their template text is not realized, and says so when nothing matches.
+- `wpf_capture_screenshot` without an element captures the active window, not the main window.
+- `wpf_set_text` writes into the inner TextBox when a composite (an AutoCompleteBox-based input)
+  exposes Value but does not take the text, and `commit` never writes an empty field over the source.
+- `wpf_window` / CLI `window`: list top-level WPF windows, wait for one to appear or close,
+  and activate, minimize, maximize, restore or close one.
+- `wpf_native_dialog` / CLI `dialog`: list and answer native Win32 dialogs (MessageBox) of
+  the attached application, which the visual tree cannot see.
+- `wpf_edit_grid_cell` / CLI `edit-cell`: edit one DataGrid cell through the grid's own
+  edit/commit cycle (validation and binding run as for a user edit).
+- `wpf_read_grid` also reads a `ListView` with a `GridView`.
+- `wpf_read_grid` reports a header element's tooltip as `headerToolTip` instead of appending
+  it to `header`, reads template cells whose text is nested deeply, and fails at once on a
+  wrong column name instead of waiting out `timeout_ms`.
+- Physical `wpf_set_text` always types into the text box inside a composite control, refuses to
+  type when the application does not own the foreground, and reports when the Text binding
+  updates its source on LostFocus (the bound value is unchanged until focus leaves the field).
+- Physical `wpf_set_text` / `wpf_send_keys` on a wrapper that cannot take focus type into
+  the editor inside it.
+- A request cancelled because it closed the application reports that instead of
+  "A task was canceled."
+- `wpf_edit_grid_cell` reports `changed` / `value` from the data item, and re-reads the grid
+  when the application applies the value after the commit.
+- Grid columns can be named as `#index` when headers repeat; the ambiguity error lists the
+  candidates.
+- Physical input brings the application to the foreground when Windows refuses a plain
+  activation (input is still sent only after foreground ownership is verified).
+- `wpf_get_visual_tree` `outline=true` / CLI `tree --outline`: indented text outline,
+  less than half the size of the JSON tree.
+
+### Changed
+
+- Searches without a root (find, wait, automation_id lookup, report) also cover open
+  context menus and tooltips, so a context menu item can be found and clicked.
+- `wpf_send_keys` sends keys only once the application verifiably owns the foreground
+  and focus is inside the target, instead of typing into whichever window is in front;
+  the result warns when WPF never received the key (global hotkey, other window).
+- `wpf_read_grid` returns the displayed text of combo columns that define their own
+  `ItemsSource` instead of the bound key.
+- `wpf_select_item` on a DataGrid with `SelectionUnit=Cell` selects and focuses a cell
+  of the row instead of failing with a WPF exception.
+- `wpf_edit_grid_cell` says when the application's `BeginningEdit` handler cancelled
+  the edit; an application that exits during a request is reported as such even when
+  the pipe read is cancelled.
+- `wpf_get_binding_errors` merges identical errors with `occurrences` / `firstSeen`.
+- `wpf_select_item` on a DataGrid scrolls the row into view, makes it the current row
+  and moves keyboard focus into it; keys sent to a grid go to its current cell, so
+  `select_item` followed by `send_keys Enter` acts on the selected row.
+- `wpf_find_elements` / `wpf_find_elements_deep` shorten each result's `path` to its
+  nearest ancestors (`full_path=true` restores it; CLI opt-in `--short-path`), and a
+  realized `DataGridRow` is searchable by its cell text.
+- `wpf_report` merges identical binding trace errors (`occurrences`, `firstSeen`) and
+  binding findings name the path and source type.
+- Clearer errors: `root_handle` passed with `element_handle`, an ID inside a closed
+  menu or unrendered container, and an application that exits during a request.
+- `wpf_read_grid` columns report `sortMemberPath` when that is the value source.
+- `automation_id` falls back to `x:Name` for elements without an explicit
+  `AutomationProperties.AutomationId` (outside templates), matching UI Automation and
+  FlaUI `ById`. An explicit ID wins; ambiguous IDs list the candidates with type,
+  handle, window and visibility.
+- CLI output and error streams are both UTF-8, so redirected `2>&1` output no longer
+  mixes the console code page with UTF-8.
+- `wpf_select_item` / CLI `select-item` on a DataGrid match `item_text` against the
+  row's visible cell texts (as `wpf_read_grid` returns them, virtualized rows
+  included) instead of the data item's `ToString()`.
+
+- `wpf_capture_screenshot` and CLI `screenshot` default to 1280x800 bounds instead of
+  1920x1080 to reduce image payloads; limits are unchanged and the SDK defaults are
+  retained. The tool description steers agents to text tools and element capture
+  first; results report the PNG size (CLI: `bytes`) and flag large images.
+
 ## [0.20.0] - 2026-10-25
 
 ### Added

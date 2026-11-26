@@ -36,6 +36,10 @@ public class BindingError
     public string ErrorType { get; set; } = string.Empty;
     public string Message { get; set; } = string.Empty;
     public DateTime Timestamp { get; set; } = DateTime.UtcNow;
+    /// <summary>Set by wpf_report, which merges identical errors: how many times this one occurred.</summary>
+    public int? Occurrences { get; set; }
+    /// <summary>Set by wpf_report for merged errors: the earliest occurrence (Timestamp is the latest).</summary>
+    public DateTime? FirstSeen { get; set; }
 }
 
 /// <summary>

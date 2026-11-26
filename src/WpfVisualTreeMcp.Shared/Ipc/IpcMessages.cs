@@ -19,6 +19,38 @@ public abstract class IpcResponse
     public string? Error { get; set; }
 }
 
+/// <summary>
+/// One number that server and Inspector builds compare, so a stale half is reported instead of
+/// surfacing as missing fields, ignored filters or unexplained "not found" errors.
+/// Raise it whenever Inspector behavior that the server relies on changes.
+/// </summary>
+public static class InspectorFeatures
+{
+    public const int Level = 12;
+
+    /// <summary>Guidance when the loaded Inspector and this server were built at different levels; null when they match.</summary>
+    public static string? CompatibilityNote(int inspectorLevel, int serverLevel = Level)
+    {
+        if (inspectorLevel == serverLevel) return null;
+        return inspectorLevel < serverLevel
+            ? $"The Inspector loaded in the attached app is older than this server (feature level {inspectorLevel} < {serverLevel}): newer tool behavior is missing there. Save your work, restart the app and reattach to load the current Inspector."
+            : $"This server is older than the Inspector loaded in the attached app (feature level {serverLevel} < {inspectorLevel}): reconnect the MCP server (or rerun the updated CLI) to load the current build.";
+    }
+}
+
+/// <summary>Reserved property_filter keys evaluated by the Inspector instead of read as CLR properties.</summary>
+public static class IpcErrors
+{
+    /// <summary>Returned by the Inspector when a request was cancelled because the application is shutting down.</summary>
+    public const string ApplicationClosing = "The application is closing and cancelled the request; if this request closed it, that is the expected result. Handles from that process are no longer valid.";
+}
+
+public static class FindFilters
+{
+    public const string OnScreen = "@onScreen";
+    public const string HasText = "@hasText";
+}
+
 public class GetCapabilitiesRequest : IpcRequest
 {
     public override string RequestType => "GetCapabilities";
@@ -31,6 +63,13 @@ public class GetCapabilitiesResponse : IpcResponse
     public bool AutomationIdOptionalResolution { get; set; }
     public bool AdvancedAutomation { get; set; }
     public bool PropertySubscriptions { get; set; }
+    public bool GridRead { get; set; }
+    /// <summary>Native Win32 dialogs (MessageBox) can be listed and answered.</summary>
+    public bool NativeDialogs { get; set; }
+    /// <summary>automation_id also matches x:Name for elements without an explicit AutomationId.</summary>
+    public bool AutomationIdNameFallback { get; set; }
+    /// <summary><see cref="InspectorFeatures.Level"/> of the loaded Inspector; 0 for builds that predate it.</summary>
+    public int FeatureLevel { get; set; }
 }
 
 public class ResolveAutomationIdRequest : IpcRequest
@@ -266,10 +305,19 @@ public class WaitForElementRequest : IpcRequest
 
     public int TimeoutMs { get; set; } = 10000;
     public int PollIntervalMs { get; set; } = 250;
+
+    /// <summary>When the condition already holds at the start, first wait until it stops holding (a reload starts).</summary>
+    public bool AfterChange { get; set; }
 }
 
 public class WaitForElementResponse : IpcResponse
 {
+    /// <summary>The condition already held when the wait started (it may describe the previous state).</summary>
+    public bool AlreadyMet { get; set; }
+
+    /// <summary>With AfterChange: the condition stopped holding at some point during the wait.</summary>
+    public bool Changed { get; set; }
+
     /// <summary>True when the condition was met before the timeout.</summary>
     public bool Matched { get; set; }
 
@@ -479,6 +527,9 @@ public class SetTextRequest : IpcRequest
 
     /// <summary>When true, focus the element and type via OS keyboard input instead of UI Automation.</summary>
     public bool Physical { get; set; }
+
+    /// <summary>When true, leave the field afterwards (as Tab would), write pending bindings and report the bound source values.</summary>
+    public bool Commit { get; set; }
 }
 
 public class SetTextResponse : IpcResponse

@@ -44,6 +44,53 @@ public sealed class ControlOperationResponse : IpcResponse
     public ControlResult Result { get; set; } = new();
 }
 
+/// <summary>Read-only page of DataGrid rows as text, evaluated from the data items so virtualized rows need no scrolling.</summary>
+public sealed class ReadGridRequest : IpcRequest
+{
+    public const int MaxLimit = 500;
+    public override string RequestType => "ReadGrid";
+    public string ElementHandle { get; set; } = string.Empty;
+    public int Offset { get; set; }
+    public int Limit { get; set; } = 50;
+    /// <summary>Optional exact headers or binding paths; empty returns every visible column in display order.</summary>
+    public List<string> Columns { get; set; } = new();
+
+    public void Validate()
+    {
+        if (string.IsNullOrWhiteSpace(ElementHandle)) throw new ArgumentException("A grid read requires an element handle.");
+        if (Offset < 0 || Limit < 1 || Limit > MaxLimit)
+            throw new ArgumentException($"Grid read requires offset >= 0 and limit 1-{MaxLimit}.");
+        if (Columns == null || Columns.Count > 200 || Columns.Any(c => string.IsNullOrEmpty(c) || c.Length > 2048))
+            throw new ArgumentException("Grid read accepts at most 200 nonempty column names.");
+    }
+}
+
+public sealed class ReadGridResponse : IpcResponse
+{
+    public GridReadResult? Result { get; set; }
+}
+
+/// <summary>Lists the native Win32 dialogs of the process, or presses a button of one when <see cref="Button"/> is set.</summary>
+public sealed class NativeDialogRequest : IpcRequest
+{
+    public override string RequestType => "NativeDialog";
+    public string? Button { get; set; }
+    public long? DialogHandle { get; set; }
+
+    /// <summary>Text written into an edit field before any button is pressed.</summary>
+    public string? FieldText { get; set; }
+
+    /// <summary>The field: its label (case-insensitive substring) or control id; optional when the dialog has one field.</summary>
+    public string? Field { get; set; }
+}
+
+public sealed class NativeDialogResponse : IpcResponse
+{
+    /// <summary>Open dialogs; after an answer, the dialogs open once the button was pressed.</summary>
+    public List<NativeDialogInfo> Dialogs { get; set; } = new();
+    public string? Detail { get; set; }
+}
+
 public sealed class WindowRequest : IpcRequest
 {
     public override string RequestType => "Window";

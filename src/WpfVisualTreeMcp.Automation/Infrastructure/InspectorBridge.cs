@@ -149,6 +149,8 @@ public partial class InspectorBridge : IIpcBridge
         };
 
         await ValidateAutomationIdAsync(session.ProcessId, automationId);
+        await ValidateTypeNameAsync(session.ProcessId, typeName);
+        await ValidateFilterAsync(session.ProcessId, propertyFilter);
         var response = await SendRequestAsync<FindElementsRequest, FindElementsResponse>(
             session.ProcessId, request);
 
@@ -177,6 +179,8 @@ public partial class InspectorBridge : IIpcBridge
         };
 
         await ValidateAutomationIdAsync(session.ProcessId, automationId);
+        await ValidateTypeNameAsync(session.ProcessId, typeName);
+        await ValidateFilterAsync(session.ProcessId, propertyFilter);
         var response = await SendRequestAsync<FindElementsDeepRequest, FindElementsDeepResponse>(
             session.ProcessId, request);
 
@@ -474,9 +478,12 @@ public partial class InspectorBridge : IIpcBridge
     }
 
     public async Task<WaitForResult> WaitForElementAsync(string? rootHandle, string? typeName, string? elementName,
-        string? text, string condition, int timeoutMs, int pollIntervalMs, string? automationId = null)
+        string? text, string condition, int timeoutMs, int pollIntervalMs, string? automationId = null, bool afterChange = false)
     {
         var session = EnsureConnected();
+        // An older Inspector would ignore the flag and match the previous state at once.
+        if (afterChange && await InspectorLevelAsync(session.ProcessId) < 12)
+            throw CreateException("after_change needs a newer Inspector than the one loaded in the attached app. Save your work, restart the app and reattach.");
 
         var request = new WaitForElementRequest
         {
@@ -487,10 +494,12 @@ public partial class InspectorBridge : IIpcBridge
             Text = text,
             Condition = condition,
             TimeoutMs = timeoutMs,
-            PollIntervalMs = pollIntervalMs
+            PollIntervalMs = pollIntervalMs,
+            AfterChange = afterChange
         };
 
         await ValidateAutomationIdAsync(session.ProcessId, automationId);
+        await ValidateTypeNameAsync(session.ProcessId, typeName);
         var response = await SendRequestAsync<WaitForElementRequest, WaitForElementResponse>(
             session.ProcessId, request);
 
@@ -504,7 +513,9 @@ public partial class InspectorBridge : IIpcBridge
             Matched = response.Matched,
             MatchedHandle = response.MatchedHandle,
             ElementType = response.ElementType,
-            WaitedMs = response.WaitedMs
+            WaitedMs = response.WaitedMs,
+            AlreadyMet = response.AlreadyMet,
+            Changed = response.Changed
         };
     }
 
@@ -656,8 +667,10 @@ public partial class InspectorBridge : IIpcBridge
     {
         if ((elementHandle == null) == (automationId == null))
             throw CreateException("Specify exactly one of element_handle or automation_id.");
-        if (elementHandle != null && (string.IsNullOrWhiteSpace(elementHandle) || rootHandle != null))
-            throw CreateException("element_handle cannot be blank and root_handle is only supported with automation_id.");
+        if (elementHandle != null && string.IsNullOrWhiteSpace(elementHandle))
+            throw CreateException("element_handle cannot be blank.");
+        if (elementHandle != null && rootHandle != null)
+            throw CreateException("root_handle only scopes an automation_id lookup. Omit root_handle when passing element_handle.");
         if (elementHandle != null) return elementHandle;
 
         var session = EnsureConnected();
@@ -684,6 +697,65 @@ public partial class InspectorBridge : IIpcBridge
         if (!response.Success || string.IsNullOrEmpty(response.ElementHandle))
             throw CreateException(response.Error ?? "Inspector did not resolve the AutomationId.");
         return response.ElementHandle;
+    }
+
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<int, int> _inspectorLevels = new();
+
+    /// <summary>
+    /// Says when the attached app's Inspector and this server are different builds. A loaded
+    /// Inspector cannot change within a process, so its level is read once per process.
+    /// </summary>
+    public async Task<string?> GetCompatibilityNoteAsync(int? processId = null)
+    {
+        var pid = processId ?? EnsureConnected().ProcessId;
+        var level = await InspectorLevelAsync(pid);
+        return level < 0 ? null : InspectorFeatures.CompatibilityNote(level);
+    }
+
+    /// <summary>The feature level of the Inspector loaded in the process (0 for old builds), or -1 when unknown.</summary>
+    private async Task<int> InspectorLevelAsync(int pid)
+    {
+        if (_inspectorLevels.TryGetValue(pid, out var level)) return level;
+        var capabilities = await SendRequestAsync<GetCapabilitiesRequest, GetCapabilitiesResponse>(pid, new GetCapabilitiesRequest());
+        if (!capabilities.Success) return -1;
+        return _inspectorLevels[pid] = capabilities.FeatureLevel;
+    }
+
+    /// <summary>The explanation for a request that got no reply because the application is gone; null while it still runs.</summary>
+    private static string? ExitedMessage(int processId)
+    {
+        // A request that closes the application (Alt+F4, an exit shortcut) ends the pipe before a reply.
+        var message = $"The application (process {processId}) exited before answering; if this request closed it, that is the expected result. Handles from that process are no longer valid.";
+        try
+        {
+            using var process = System.Diagnostics.Process.GetProcessById(processId);
+            return process.WaitForExit(1000) ? message : null;
+        }
+        catch (ArgumentException) { return message; }
+        catch (InvalidOperationException) { return null; }
+    }
+
+    private static string EmptyResponseError(int processId) => ExitedMessage(processId)
+        ?? "Empty response from inspector: the application closed the connection without answering but is still running. Retry, and reattach if it keeps failing.";
+
+    private async Task ValidateFilterAsync(int processId, Dictionary<string, string>? propertyFilter)
+    {
+        // An older Inspector would look for a CLR property named '@onScreen' and silently match nothing.
+        if (propertyFilter == null || !propertyFilter.Keys.Any(key => key.StartsWith("@", StringComparison.Ordinal))) return;
+        if (await GetCompatibilityNoteAsync(processId) is { } note && _inspectorLevels.TryGetValue(processId, out var level) && level < InspectorFeatures.Level)
+            throw CreateException("on_screen / has_text filters are not available. " + note);
+    }
+
+    private async Task ValidateTypeNameAsync(int processId, string? typeName)
+    {
+        if (typeName == null || !typeName.StartsWith("=", StringComparison.Ordinal)) return;
+        if (typeName.Trim().Length == 1)
+            throw CreateException("type_name '=' needs a type name after it, for example '=DataGrid'.");
+        // An older Inspector would treat '=Type' as a substring and silently find nothing.
+        // Exact type matching shipped together with grid reads, so that capability covers it.
+        var response = await SendRequestAsync<GetCapabilitiesRequest, GetCapabilitiesResponse>(processId, new GetCapabilitiesRequest());
+        if (!response.Success || !response.GridRead)
+            throw CreateException("Exact type matching ('=Type') requires a newer Inspector than the one loaded in the attached app. Save your work, restart the app, and reattach using the updated server.");
     }
 
     private async Task ValidateAutomationIdAsync(int processId, string? automationId)
@@ -749,15 +821,19 @@ public partial class InspectorBridge : IIpcBridge
         };
     }
 
-    public async Task<SetTextResult> SetTextAsync(string elementHandle, string text, bool physical)
+    public async Task<SetTextResult> SetTextAsync(string elementHandle, string text, bool physical, bool commit = false)
     {
         var session = EnsureConnected();
+        // An older Inspector would ignore the flag and report success without committing.
+        if (commit && await InspectorLevelAsync(session.ProcessId) < 10)
+            throw CreateException("commit needs a newer Inspector than the one loaded in the attached app. Save your work, restart the app and reattach.");
 
         var request = new SetTextRequest
         {
             ElementHandle = elementHandle,
             Text = text ?? string.Empty,
-            Physical = physical
+            Physical = physical,
+            Commit = commit
         };
 
         var response = await SendRequestAsync<SetTextRequest, SetTextResponse>(
@@ -861,10 +937,20 @@ public partial class InspectorBridge : IIpcBridge
 
             if (string.IsNullOrEmpty(responseJson))
             {
-                return new TResponse { Success = false, Error = "Empty response from inspector" };
+                return new TResponse { Success = false, Error = EmptyResponseError(processId) };
             }
 
             var response = IpcSerializer.DeserializeResponse<TResponse>(responseJson);
+            // Older Inspectors answer a request cancelled by application shutdown with the bare exception text.
+            if (response is { Success: false, Error: not null } && response.Error.Contains("canceled", StringComparison.OrdinalIgnoreCase)
+                && response.Error.Length < 60 && ExitedMessage(processId) is { } exited)
+            {
+                response.Error = exited;
+                return response;
+            }
+            if (response is { Success: false, Error: not null } && request is not GetCapabilitiesRequest
+                && await GetCompatibilityNoteAsync(processId) is { } note)
+                response.Error += " Note: " + note;
             return response ?? new TResponse { Success = false, Error = "Failed to parse response" };
         }
         catch (OperationCanceledException) when (_cancellation.Value.IsCancellationRequested)
@@ -879,12 +965,17 @@ public partial class InspectorBridge : IIpcBridge
         }
         catch (IOException ex)
         {
+            if (ExitedMessage(processId) is { } exited)
+                return new TResponse { Success = false, Error = exited };
             var errorMsg = $"Cannot connect to process {processId}: {ex.Message}. The named pipe may not exist. Use wpf_list_processes() to see available WPF applications, then wpf_attach(process_id=<new_pid>) to connect.";
             _logger.LogWarning(ex, errorMsg);
             return new TResponse { Success = false, Error = errorMsg };
         }
         catch (Exception ex)
         {
+            // A request that closes the application can also surface as a cancelled or broken read.
+            if (ExitedMessage(processId) is { } exited)
+                return new TResponse { Success = false, Error = exited };
             _logger.LogError(ex, "Unexpected error sending request to inspector");
             return new TResponse { Success = false, Error = ex.Message };
         }

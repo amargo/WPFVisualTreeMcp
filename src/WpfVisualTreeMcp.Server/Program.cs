@@ -70,7 +70,8 @@ try
     builder.Services
         .AddMcpServer()
         .WithStdioServerTransport()
-        .WithToolsFromAssembly();
+        .WithToolsFromAssembly()
+        .AddCallToolFilter(WpfVisualTreeMcp.Server.ToolArgumentGuard.Filter);
 
     // Build and run
     await builder.Build().RunAsync();

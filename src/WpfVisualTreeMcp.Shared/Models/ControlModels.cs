@@ -60,6 +60,84 @@ public sealed class GridColumnInfo
     public bool IsReadOnly { get; set; }
 }
 
+/// <summary>One page of DataGrid rows. Row indices follow the current items view (sorting/filtering applied).</summary>
+public sealed class GridReadResult
+{
+    /// <summary>Handle of the DataGrid that was read (differs from the request when a container was passed).</summary>
+    public string GridHandle { get; set; } = string.Empty;
+    public int RowCount { get; set; }
+    public int Offset { get; set; }
+    public int Returned { get; set; }
+    public bool HasMore { get; set; }
+    public List<GridReadColumn> Columns { get; set; } = new();
+    public List<GridReadRow> Rows { get; set; } = new();
+    public List<int> SelectedIndices { get; set; } = new();
+    public int? CurrentRowIndex { get; set; }
+    public string? Note { get; set; }
+    /// <summary>Set when min_rows / contains_text were given: how long the read waited for them to hold.</summary>
+    public int? WaitedMs { get; set; }
+}
+
+public sealed class GridReadColumn
+{
+    /// <summary>Index in DataGrid.Columns, independent of display reordering.</summary>
+    public int Index { get; set; }
+    public string? Header { get; set; }
+    /// <summary>Tooltip of an element header; reported apart from the caption.</summary>
+    public string? HeaderToolTip { get; set; }
+    /// <summary>Binding path; "." when the binding targets the whole data item, child paths joined for multi-bindings.</summary>
+    public string? BindingPath { get; set; }
+    /// <summary>The member read for valueSource "sortMemberPath" columns.</summary>
+    public string? SortMemberPath { get; set; }
+    /// <summary>Type name of the binding's value converter, when it has one.</summary>
+    public string? Converter { get; set; }
+    /// <summary>"binding" (evaluated on the data item), "sortMemberPath" or "visual" (text of realized cells only).</summary>
+    public string ValueSource { get; set; } = "binding";
+}
+
+/// <summary>A native Win32 dialog (MessageBox, common dialog) owned by the inspected process.</summary>
+public sealed class NativeDialogInfo
+{
+    /// <summary>Window handle (HWND); identifies the dialog when several are open.</summary>
+    public long Handle { get; set; }
+    public string Title { get; set; } = string.Empty;
+    /// <summary>Message text, one line per text control.</summary>
+    public string Text { get; set; } = string.Empty;
+    public List<NativeDialogButton> Buttons { get; set; } = new();
+    /// <summary>Editable text fields (file name of a Save As dialog, an input box).</summary>
+    public List<NativeDialogField> Fields { get; set; } = new();
+    public bool IsForeground { get; set; }
+    public string? OwnerTitle { get; set; }
+    public string? Note { get; set; }
+}
+
+public sealed class NativeDialogField
+{
+    public long Handle { get; set; }
+    public int Id { get; set; }
+    /// <summary>The label shown next to the field, without the access-key marker; empty when it has none.</summary>
+    public string Label { get; set; } = string.Empty;
+    public string Text { get; set; } = string.Empty;
+    public bool IsEnabled { get; set; }
+}
+
+public sealed class NativeDialogButton
+{
+    public long Handle { get; set; }
+    public int Id { get; set; }
+    /// <summary>Caption without the access-key marker.</summary>
+    public string Text { get; set; } = string.Empty;
+    public bool IsEnabled { get; set; }
+    public bool IsDefault { get; set; }
+}
+
+public sealed class GridReadRow
+{
+    public int Index { get; set; }
+    /// <summary>One entry per returned column, in the same order; null when the value is unavailable.</summary>
+    public List<string?> Cells { get; set; } = new();
+}
+
 public sealed class WpfWindowInfo
 {
     public string Handle { get; set; } = string.Empty;

@@ -164,6 +164,7 @@
                 <StackPanel Grid.Column="0" Orientation="Horizontal">
                     <Button x:Name="OpenDragDemoButton" AutomationProperties.AutomationId="open.drag" Content="Drag demo" Click="OpenDragDemo" Margin="0,0,12,0"/>
                     <Button x:Name="OpenTouchDemoButton" AutomationProperties.AutomationId="open.touch" Content="Touch demo" Click="OpenTouchDemo" Margin="0,0,12,0"/>
+                    <Button x:Name="ConfirmDemoButton" AutomationProperties.AutomationId="open.confirm" Content="Confirm demo" Click="OpenConfirmDemo" Margin="0,0,12,0"/>
                     <TextBlock Text="Items: " Foreground="Gray"/>
                     <TextBlock Text="{Binding Items.Count}" FontWeight="Bold"/>
                     <TextBlock Text="  |  " Foreground="LightGray"/>

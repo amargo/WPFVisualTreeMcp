@@ -25,7 +25,7 @@ projects. The x86 injection helper can also use .NET 9 or 10 when .NET 8 is abse
 
 The [`WpfVisualTreeMcp.Automation` C# SDK](https://www.nuget.org/packages/WpfVisualTreeMcp.Automation)
 drives virtualized DataGrids/TreeViews, waits for controls, manages WPF windows and
-streams property changes. The 38-tool MCP server and CLI share the inspection and
+streams property changes. The 43-tool MCP server and CLI share the inspection and
 input engine, including direct AutomationId targeting.
 
 Workflow recording/replay/xUnit export, aggregate diagnostics, full-content screenshots
@@ -596,7 +596,8 @@ For complete tool documentation, see [docs/TOOLS_REFERENCE.md](docs/TOOLS_REFERE
 All input actions accept `automation_id` instead of `element_handle`, including
 click, mouse movement, scrolling, drag, every touch gesture, selection, text and
 keyboard input. Assertions and property edits accept it too. IDs match
-`AutomationProperties.AutomationId` exactly and case-sensitively; duplicates fail.
+`AutomationProperties.AutomationId` exactly and case-sensitively (or `x:Name` for
+elements without one, outside templates); duplicates fail.
 Use `root_handle` to scope lookup. Drag destinations accept `target_automation_id`
 and an independent `target_root_handle`. The same selectors work in recordings
 and exported tests.
@@ -730,7 +731,7 @@ WpfVisualTreeMcp/
 ├── src/
 │   ├── WpfVisualTreeMcp.Server/        # MCP Server (.NET 8) - Uses official MCP SDK
 │   │   ├── Program.cs                  # Server initialization with MCP SDK
-│   │   ├── WpfTools.cs                 # 38 inspection, interaction and workflow tools
+│   │   ├── WpfTools.cs                 # 43 inspection, interaction and workflow tools
 │   │   ├── Cli/CliRunner.cs            # One-shot CLI front-end (v0.4.0)
 │   │   └── Services/                   # Process & IPC management
 │   ├── WpfVisualTreeMcp.Inspector/     # Injected DLL (Framework 4.7.2/4.8/4.8.1; .NET 8/9/10)
@@ -754,7 +755,7 @@ WpfVisualTreeMcp/
 - **Protocol**: JSON-RPC 2.0 over stdio transport
 - **Target Framework**: .NET 8.0 (Server) / .NET Framework 4.7.2, 4.8 and .NET 8.0-windows (Inspector)
 - **IPC**: Named Pipes for server-to-application communication
-- **Tools**: 38 tools auto-discovered via `[McpServerTool]` attributes, covering inspection, diagnostics, interaction and workflow recording/testing. Replay performs recorded actions; full-content screenshots may temporarily scroll controls.
+- **Tools**: 43 tools auto-discovered via `[McpServerTool]` attributes, covering inspection, diagnostics, interaction and workflow recording/testing. Replay performs recorded actions; full-content screenshots may temporarily scroll controls.
 - **CLI**: same executable runs as one-shot CLI when given a subcommand (`Program.cs` routes via `CliRunner.IsCliCommand`)
 
 ## Acknowledgments
